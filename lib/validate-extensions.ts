@@ -52,7 +52,7 @@ export function validateExtensions(l: Ledger) {
         const p = l.preferences;
         if (p.cards && (!Array.isArray(p.cards) || new Set(p.cards).size !== p.cards.length || p.cards.some(k => !cardNames[k])))
             throw Error('首页卡片无效');
-        for (const k of ['autoPost', 'cloudAI', 'retainInput', 'offline'] as const)
+        for (const k of ['autoPost', 'cloudAI', 'retainInput', 'offline', 'digitalEnabled', 'securitiesEnabled'] as const)
             if (p[k] !== undefined && typeof p[k] !== 'boolean')
                 throw Error('记账偏好无效');
         if (p.refundMode && !['occurrence', 'original'].includes(p.refundMode))

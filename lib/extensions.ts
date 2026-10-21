@@ -36,9 +36,11 @@ export type Preferences = {
     refundMode: 'occurrence' | 'original';
     offline: boolean;
     costMethod: '' | 'average' | 'fifo';
+    digitalEnabled: boolean;
+    securitiesEnabled: boolean;
 };
 export const cardNames: Record<string, string> = { summary: '收支概览', compose: '一句话记账', recent: '最近流水', reminders: '账单提醒', budget: '本月预算', categories: '支出分类', accounts: '账户概览' };
-export const defaultPreferences: Preferences = { cards: Object.keys(cardNames), autoPost: false, cloudAI: false, retainInput: true, refundMode: 'occurrence', offline: false, costMethod: '' };
+export const defaultPreferences: Preferences = { cards: Object.keys(cardNames), autoPost: false, cloudAI: false, retainInput: true, refundMode: 'occurrence', offline: false, costMethod: '', digitalEnabled: false, securitiesEnabled: false };
 export type DigitalWallet = {
     id: string;
     name: string;

@@ -6,6 +6,7 @@ import { Plus, Pencil, ArrowUp, ArrowDown, CalendarDays } from 'lucide-react';
 import { newId } from '../../lib/ids';
 import { accountRegion, hasHKDBalance, hasHKDSettings } from '../../lib/account-currency';
 import { isHKAccount } from '../../lib/hk-securities';
+import { moduleEnabled } from '../../lib/optional-modules';
 import { updateSecuritiesValue } from '../../lib/securities';
 import { cents, money, balances, nativeBalances, today, validate, accountType, accountTypeNames, type Ledger, type Account, type Tx } from '../../lib/ledger';
 import { budgetFor, categorySpend, categoryDescendants, creditStatement, dueOccurrences, generateRecurring, mergeCategory, calendarText, prefs } from '../../lib/features';
@@ -26,8 +27,9 @@ export function AccountPanel({ ledger: l, save, busy, onSecurities }: PanelProps
     const [valuation, setValuation] = useState<string | null>(null);
     const bal = balances(l);
     const securities = l.accounts.filter(a => accountType(a) === 'securities');
+    const securitiesEnabled = moduleEnabled(l, 'securities');
     function begin(account: Account) {
-        if (isHKAccount(l, account.id) && onSecurities) { onSecurities(); return; }
+        if (isHKAccount(l, account.id)) { if (securitiesEnabled) onSecurities?.(); return; }
         setEdit({ ...account, region: accountRegion(account) });
         setValuation(null);
         setError('');
@@ -75,20 +77,20 @@ export function AccountPanel({ ledger: l, save, busy, onSecurities }: PanelProps
         <div className="section-heading account-heading">
             <h2>账户管理</h2>
             <div className="button-row">
-                <button className="text-button" disabled={busy} onClick={() => onSecurities ? onSecurities() : begin({ id: newId(), name: '', kind: 'asset', subtype: 'securities', opening: 0, active: true })}><Plus size={14}/>港股账户与明细</button>
+                {securitiesEnabled && <button className="text-button" disabled={busy} onClick={() => onSecurities ? onSecurities() : begin({ id: newId(), name: '', kind: 'asset', subtype: 'securities', opening: 0, active: true })}><Plus size={14}/>港股账户与明细</button>}
                 <button className="text-button" disabled={busy} onClick={() => begin({ id: newId(), name: '', kind: 'asset', opening: 0, active: true })}><Plus size={14}/>新增账户</button>
             </div>
         </div>
-        <p className="muted account-help">港股账户在“港股证券”录入股票，银证转账统一在“记一笔 → 内部转账”操作。所有银行资金账户均可分别记录人民币和港币余额，转账币种不受账户地区限制；旧记录的人民币余额保持原样。</p>
+        <p className="muted account-help">{securitiesEnabled && '港股账户在“港股证券”录入股票，银证转账统一在“记一笔 → 内部转账”操作。'}所有银行资金账户均可分别记录人民币和港币余额，转账币种不受账户地区限制；旧记录的人民币余额保持原样。</p>
         {securities.length > 0 && <p className="status-note">证券账户合计（含停用账户） <b>¥{money(securities.reduce((sum, a) => sum + bal[a.id], 0))}</b></p>}
         <div className="account-cards">{l.accounts.map(a => {
             const s = creditStatement(l, a), isSecurities = accountType(a) === 'securities';
             return <article className={'credit-card ' + (a.active === false ? 'disabled-card' : '')} key={a.id}>
-                <div><b>{a.name}</b><button className="icon-button" disabled={busy} aria-label={'编辑 ' + a.name} onClick={() => begin(a)}><Pencil size={14}/></button></div>
+                <div><b>{a.name}</b>{(!isHKAccount(l, a.id) || securitiesEnabled) && <button className="icon-button" disabled={busy} aria-label={'编辑 ' + a.name} onClick={() => begin(a)}><Pencil size={14}/></button>}</div>
                 <span>{isHKAccount(l, a.id) ? '港股账户 · 折合人民币（CNY）' : isSecurities ? '证券账户 · 总资产（CNY）' : a.kind === 'debt' ? '账本应还' : hasHKDSettings(a) ? '资金账户 · 港币余额' : '账户余额'}{a.active === false ? ' · 已停用' : ''}</span>
                 <strong>{hasHKDSettings(a) ? 'HK$' + money(native.HKD[a.id]) : '¥' + money(bal[a.id])}</strong>
                 {hasHKDSettings(a) && <p className="muted">人民币余额 ¥{money(native.CNY[a.id])} · 折合人民币合计 ¥{money(bal[a.id])}{a.hkdToCNY ? ` · 1 HKD = ${a.hkdToCNY} CNY` : ' · 尚未设置港币折算汇率'}</p>}
-                {isHKAccount(l, a.id) ? <div className="import-actions"><button className="text-button" onClick={onSecurities}>管理港股持仓</button></div> : isSecurities && <div className="import-actions"><button className="text-button" aria-label={"更新市值 · " + a.name} disabled={busy || a.active === false} onClick={() => { setValuation(a.id); setEdit(null); setError(''); }}>更新市值</button></div>}
+                {isHKAccount(l, a.id) ? securitiesEnabled && <div className="import-actions"><button className="text-button" onClick={onSecurities}>管理港股持仓</button></div> : isSecurities && <div className="import-actions"><button className="text-button" aria-label={"更新市值 · " + a.name} disabled={busy || a.active === false} onClick={() => { setValuation(a.id); setEdit(null); setError(''); }}>更新市值</button></div>}
                 {a.kind === 'debt' && a.creditLimit ? <p className="muted">额度 ¥{money(a.creditLimit)} · 可用估算 ¥{money(Math.max(0, a.creditLimit - Math.max(0, bal[a.id])))}</p> : null}
                 {s ? <><div className="statement-row"><span>账期 {s.start} 至 {s.close}</span><b>账本本期应还 ¥{money(s.outstanding)}</b><span>未出账 ¥{money(s.unbilled)} · {s.overdue ? '已逾期' : '还款日'} {s.due}</span></div><p className="muted">按账本流水估算，请核对银行实际账单。</p></> : a.kind === 'debt' ? <p className="muted">编辑账户，填写账单日与还款日。</p> : null}
             </article>;
@@ -97,7 +99,7 @@ export function AccountPanel({ ledger: l, save, busy, onSecurities }: PanelProps
             <h3>{l.accounts.some(a => a.id === edit.id) ? '编辑账户' : accountType(edit) === 'securities' ? '新增证券账户' : '新账户'}</h3>
             <div className="form-grid">
                 <label>名称<input name="name" autoFocus required defaultValue={edit.name} placeholder={accountType(edit) === 'securities' ? '如：我的证券账户、券商名称' : ''} maxLength={100} disabled={busy}/></label>
-                <label>类型<select name="kind" value={accountType(edit)} disabled={busy} onChange={e => { const type = e.target.value; setEdit({ ...edit, kind: type === 'debt' ? 'debt' : 'asset', subtype: type === 'securities' ? 'securities' : undefined }); }}>{Object.entries(accountTypeNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label>
+                <label>类型<select name="kind" value={accountType(edit)} disabled={busy} onChange={e => { const type = e.target.value; setEdit({ ...edit, kind: type === 'debt' ? 'debt' : 'asset', subtype: type === 'securities' ? 'securities' : undefined }); }}>{Object.entries(accountTypeNames).filter(([value]) => value !== 'securities' || securitiesEnabled || accountType(edit) === 'securities').map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label>
                 <label>{accountType(edit) === 'securities' ? '期初总资产（人民币元）' : hasHKDBalance(edit) ? '期初人民币余额（保留原有人民币）' : '期初余额 / 期初负债'}<input name="opening" required type="number" step="0.01" defaultValue={edit.opening / 100} disabled={busy}/></label>
                 {edit.kind === 'asset' && !edit.subtype && <label>账户地区<select value={accountRegion(edit)} disabled={busy} onChange={e => setEdit({ ...edit, region: e.target.value as 'mainland' | 'hongkong' })}><option value="mainland">内地</option><option value="hongkong">香港</option></select></label>}
                 {hasHKDBalance(edit) && <><label>期初港币余额（HKD）<input name="openingHKD" type="number" step="0.01" required defaultValue={(edit.openingHKD || 0) / 100} disabled={busy}/></label><label>银行折算汇率：1 港币 = 人民币<input type="number" min="0.00000001" max="100" step="0.00000001" value={edit.hkdToCNY || ''} disabled={busy || rateLoading} onChange={e => setEdit({ ...edit, hkdToCNY: e.target.value, hkdRateAt: new Date().toISOString() })}/></label><div className="import-actions"><button type="button" className="secondary" disabled={busy || rateLoading} onClick={async () => { const id = edit.id; setRateLoading(true); setError(''); try { const r = await fetch('/api/hk-rates'); const data = await r.json() as { error?: string; hkdToCNY: string; at: string }; if (!r.ok) throw Error(data.error || '获取汇率失败'); setEdit(previous => previous?.id === id ? { ...previous, hkdToCNY: data.hkdToCNY, hkdRateAt: data.at } : previous); } catch (e) { setError((e as Error).message); } finally { setRateLoading(false); } }}>{rateLoading ? '获取中…' : '获取港币参考汇率'}</button></div></>}
