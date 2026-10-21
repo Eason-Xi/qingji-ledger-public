@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { createMarketPriceService, parseMarketPrices, withMarketPrices, MAX_PRICE_AGE, PRICE_URL, COINBASE_URL, MAIN_COINS, SUPPORTED_COINS } from '../lib/market-prices.ts';
 import { digitalPositions } from '../lib/digital.ts';
 const selection = [...MAIN_COINS];
+const legacyBox = { symbol: 'BOX', name: 'BOX（李笑来）', priceId: '' };
+const legacyBoxSource = 'BigONE BOX/USDT';
+assert.deepEqual(SUPPORTED_COINS.map(c => c.symbol), ['BTC', 'ETH', 'USDT']);
 const sol = { symbol: 'SOL', name: 'Solana', priceId: 'solana' };
 const isPrimary = url => String(url).startsWith('https://api.coingecko.com/api/v3/simple/price?');
 const requestedIDs = url => new URL(String(url)).searchParams.get('ids').split(',').sort();
@@ -67,26 +70,41 @@ assert.equal(withMarketPrices(historical, null, now).quotes.u, undefined);
 assert.equal(historical.quotes.u.priceCNY, '7');
 console.log('PASS: dual USD/CNY quotes from all three sources, non-pegged USDT, invalid USD rejection, freshness, cache/backoff, precise CNY valuation and manual fallback without changing balances.');
 
-const { parseBoxQuote, BOX_SOURCE, BOX_TICKER_URL, BOX_TRADES_URL } = await import('../lib/box-price.ts');
-const boxTicker = {code:0,data:{asset_pair_name:'BOX-USDT',close:'8.4'}};
-const boxTrades = {code:0,data:[{price:'8.4',created_at:new Date(now-1800000).toISOString()}]};
-const usdtQuote = {priceUSD:'0.99',priceCNY:'7.1',source:'fixture',at:new Date(now).toISOString(),change24h:null};
-const boxQuote = parseBoxQuote(boxTicker,boxTrades,usdtQuote,now);
-assert.equal(boxQuote.priceUSD,'8.31600000');assert.equal(boxQuote.priceCNY,'59.64000000');assert.equal(boxQuote.tradeAt,boxTrades.data[0].created_at);assert.equal(boxQuote.change24h,null);
-assert.throws(()=>parseBoxQuote({...boxTicker,data:{...boxTicker.data,asset_pair_name:'BOX4-USDT'}},boxTrades,usdtQuote,now));
-for(const price of ['0','-1','NaN','1e9',null]) assert.throws(()=>parseBoxQuote(boxTicker,{code:0,data:[{...boxTrades.data[0],price}]},usdtQuote,now));
-for(const created_at of ['invalid',new Date(now-86400001).toISOString(),new Date(now+120000).toISOString()]) assert.throws(()=>parseBoxQuote(boxTicker,{code:0,data:[{price:'8.4',created_at}]},usdtQuote,now));
-assert.throws(()=>parseBoxQuote(boxTicker,boxTrades,undefined,now));
-assert.throws(()=>parseBoxQuote(boxTicker,boxTrades,{...usdtQuote,at:new Date(now-900001).toISOString()},now));
-let boxCalls=0;
-const boxService=createMarketPriceService(async url=>{boxCalls++; if(url===PRICE_URL)return Response.json(fixture()); if(url===BOX_TICKER_URL)return Response.json(boxTicker);if(url===BOX_TRADES_URL)return Response.json(boxTrades);throw Error('unexpected URL');},()=>now);
-const boxPrices=await boxService(SUPPORTED_COINS);assert.equal(boxPrices.quotes.BOX.source,BOX_SOURCE);await boxService(SUPPORTED_COINS);assert.equal(boxCalls,3);
-const boxBook=structuredClone(book);boxBook.marketWatchlist.push(SUPPORTED_COINS.find(c=>c.symbol==='BOX'));boxBook.assets.push({id:'box',symbol:'Box',name:'BOX',priceId:'',network:''});boxBook.manualBalances.push({id:'w|box',wallet:'w',asset:'box',quantity:'10',updated:new Date(now).toISOString(),note:''});boxBook.quotes.box={priceCNY:'50',source:'手动录入',at:new Date(now).toISOString()};
-assert.equal(withMarketPrices(boxBook,boxPrices,now).quotes.box.source,BOX_SOURCE);
-assert.equal(withMarketPrices(boxBook,boxPrices,now+MAX_PRICE_AGE+1).quotes.box.source,'手动录入');
-const failedBox=createMarketPriceService(async url=>url===PRICE_URL?Response.json(fixture()):new Response('down',{status:503}),()=>now);
-const withoutBox=await failedBox(SUPPORTED_COINS);assert.ok(withoutBox.quotes.BTC);assert.equal(withoutBox.quotes.BOX,undefined);assert.match(withoutBox.boxError,/BOX/);
-console.log('PASS: verified BOX pair, non-pegged USDT conversions, trade timestamps, invalid/stale rejection, cache, mixed-case asset matching, manual fallback and isolated provider failure');
+// A removed built-in market must never fetch BigONE or an implicit USDT dependency.
+let removedCalls = 0;
+const removedMarket = createMarketPriceService(async () => { removedCalls++; throw Error('Removed BOX must not query a provider'); }, () => now);
+assert.deepEqual((await removedMarket([legacyBox])).quotes, {});
+assert.deepEqual((await removedMarket([legacyBox])).quotes, {});
+assert.equal(removedCalls, 0);
+const mixedURLs = [];
+const withoutRemoved = createMarketPriceService(async url => {
+    mixedURLs.push(String(url)); assert.ok(isPrimary(url));
+    assert.deepEqual(requestedIDs(url), ['bitcoin']);
+    return Response.json(fixture());
+}, () => now);
+assert.deepEqual(Object.keys((await withoutRemoved([MAIN_COINS[0], legacyBox])).quotes), ['BTC']);
+assert.equal(mixedURLs.length, 1);
+
+// A delayed old response cannot re-enable the removed BOX automatic valuation.
+const boxBook = structuredClone(book);
+boxBook.marketWatchlist.push(legacyBox);
+boxBook.assets.push({ id: 'box', symbol: 'Box', name: 'BOX', priceId: '', network: '' });
+boxBook.manualBalances.push({ id: 'w|box', wallet: 'w', asset: 'box', quantity: '10', updated: new Date(now).toISOString(), note: '' });
+boxBook.quotes.box = { priceCNY: '50', source: '手动录入', at: new Date(now).toISOString() };
+const boxSnapshot = structuredClone(boxBook);
+const delayedLegacyPrices = { ...prices, quotes: { ...prices.quotes, BOX: { priceCNY: '59.64', priceUSD: '8.316', source: legacyBoxSource, at: new Date(now).toISOString(), change24h: null } } };
+const retained = withMarketPrices(boxBook, delayedLegacyPrices, now);
+assert.equal(retained.quotes.box.source, '手动录入');
+assert.equal(retained.quotes.box.priceCNY, '50');
+assert.deepEqual(retained.assets, boxBook.assets);
+assert.deepEqual(retained.manualBalances, boxBook.manualBalances);
+assert.deepEqual(retained.events, boxBook.events);
+assert.deepEqual(boxBook, boxSnapshot);
+const staleBox = structuredClone(boxBook);
+staleBox.quotes.box = { priceCNY: '59.64', source: legacyBoxSource, at: new Date(now).toISOString() };
+assert.equal(withMarketPrices(staleBox, delayedLegacyPrices, now).quotes.box, undefined);
+assert.equal(staleBox.quotes.box.source, legacyBoxSource);
+console.log('PASS: removed built-in BOX makes zero queries or USDT dependency requests, delayed automatic prices are ignored, manual references and holdings remain unchanged');
 
 let releaseFirst, firstStarted=false;
 const independent=createMarketPriceService(async url=>{
@@ -152,20 +170,17 @@ await ordered([MAIN_COINS[0], MAIN_COINS[1]]);
 await ordered([MAIN_COINS[1], MAIN_COINS[0]]);
 assert.equal(orderedCalls, 1);
 
-// BOX alone depends on USDT's real USD/CNY rate, but USDT is not added to the public result.
-const boxOnlyURLs = [];
-const boxOnlyService = createMarketPriceService(async url => {
-    boxOnlyURLs.push(String(url));
-    if (isPrimary(url)) { assert.deepEqual(requestedIDs(url), ['tether']); return Response.json(fixture()); }
-    if (url === BOX_TICKER_URL) return Response.json(boxTicker);
-    if (url === BOX_TRADES_URL) return Response.json(boxTrades);
-    throw Error('Unexpected BOX dependency request');
+// BOX is not a reserved ticker for unrelated user-added CoinGecko assets.
+const customBox = { symbol: 'BOX', name: 'User supplied token', priceId: 'custom-box-token' };
+const customBoxService = createMarketPriceService(async url => {
+    assert.ok(isPrimary(url)); assert.deepEqual(requestedIDs(url), ['custom-box-token']);
+    return Response.json({ 'custom-box-token': { cny: 2.1, usd: 0.3, last_updated_at: now / 1000 } });
 }, () => now);
-const onlyBox = await boxOnlyService([SUPPORTED_COINS.find(c => c.symbol === 'BOX')]);
-assert.deepEqual(Object.keys(onlyBox.quotes), ['BOX']);
-assert.equal(onlyBox.quotes.BOX.source, BOX_SOURCE);
-assert.equal(onlyBox.quotes.USDT, undefined);
-assert.equal(boxOnlyURLs.length, 3);
+const customBoxPrices = await customBoxService([customBox]);
+assert.equal(customBoxPrices.quotes.BOX.priceCNY, '2.1');
+assert.equal(customBoxPrices.quotes.BOX.priceUSD, '0.3');
+assert.equal(customBoxPrices.quotes.BOX.priceId, 'custom-box-token');
+assert.equal(customBoxPrices.quotes.BOX.source, 'CoinGecko');
 
 // One unknown or unavailable custom ID does not prevent another selected coin's valid quote.
 const partialService = createMarketPriceService(async url => isPrimary(url) ? Response.json(fixture()) : new Response('unavailable', { status: 503 }), () => now);
@@ -176,4 +191,4 @@ assert.equal(partial.quotes.SOL, undefined); assert.equal(partial.quotes.ETH, un
 // A preset ticker cannot be redirected to another provider asset.
 const guarded = createMarketPriceService(async () => { throw Error('Invalid selections must be rejected before network'); }, () => now);
 await assert.rejects(guarded([{ symbol: 'BTC', name: 'Impostor', priceId: 'solana' }]));
-console.log('PASS: empty lists make zero network calls, dynamic USD/CNY quotes, scoped pending/cache isolation, order-normalized cache, hidden BOX dependency, partial availability and preset identity validation');
+console.log('PASS: empty lists make zero network calls, dynamic USD/CNY quotes, scoped pending/cache isolation, order-normalized cache, removed BOX compatibility, explicit custom IDs, partial availability and preset identity validation');

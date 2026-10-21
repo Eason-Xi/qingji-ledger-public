@@ -7,15 +7,18 @@ import { initial, validate } from '../lib/ledger.ts';
 const preset = symbol => { const { name, priceId } = MARKET_PRESETS.find(c => c.symbol === symbol); return { symbol, name, priceId }; };
 const btc = preset('BTC');
 const usdt = preset('USDT');
-const box = preset('BOX');
+const legacyBox = { symbol: 'BOX', name: 'BOX（李笑来）', priceId: '' };
+const customBox = { symbol: 'BOX', name: 'User supplied token', priceId: 'custom-box-token' };
 const sol = { symbol: 'SOL', name: 'Solana', priceId: 'solana' };
-assert.deepEqual(MARKET_PRESETS.map(c => c.symbol), ['BTC', 'ETH', 'USDT', 'BOX']);
+assert.deepEqual(MARKET_PRESETS.map(c => c.symbol), ['BTC', 'ETH', 'USDT']);
 assert.deepEqual(marketWatchlist(emptyDigital()), []);
 assert.deepEqual(marketWatchlist({ ...emptyDigital(), marketWatchlist: [] }), []);
 validateMarketWatchlist([]);
-validateMarketWatchlist([btc, sol, box]);
+validateMarketWatchlist([btc, sol, legacyBox]); // Compatibility permits opening old backups.
+validateMarketWatchlist([customBox]);
+assert.deepEqual(marketWatchlist({ ...emptyDigital(), marketWatchlist: [btc, legacyBox, sol] }), [btc, sol]);
 
-for (const value of [null, {}, 'BTC', [null], [{ ...sol, symbol: '' }], [{ ...sol, name: '' }], [{ ...sol, priceId: '' }], [{ ...sol, priceId: 'https://example.invalid/solana' }], [{ ...sol, priceId: 'solana?x=1' }], [{ ...sol, symbol: 'X'.repeat(31) }], [{ ...sol, name: 'x'.repeat(201) }], [{ ...sol, priceId: 'x'.repeat(101) }], [sol, { ...sol }], [{ ...btc, priceId: 'solana' }], [{ ...box, priceId: 'box-4' }]]) {
+for (const value of [null, {}, 'BTC', [null], [{ ...sol, symbol: '' }], [{ ...sol, name: '' }], [{ ...sol, priceId: '' }], [{ ...sol, priceId: 'https://example.invalid/solana' }], [{ ...sol, priceId: 'solana?x=1' }], [{ ...sol, symbol: 'X'.repeat(31) }], [{ ...sol, name: 'x'.repeat(201) }], [{ ...sol, priceId: 'x'.repeat(101) }], [sol, { ...sol }], [{ ...btc, priceId: 'solana' }], [{ ...legacyBox, priceId: 'invalid/id' }]]) {
     assert.throws(() => validateMarketWatchlist(value), `Accepted invalid watchlist: ${JSON.stringify(value)}`);
 }
 const capacity = Array.from({ length: 50 }, (_, n) => ({ symbol: 'T' + n, name: 'Test ' + n, priceId: 'test-' + n }));
@@ -30,6 +33,8 @@ const withSol = addMarketCoin(added, sol);
 assert.deepEqual(marketWatchlist(withSol), [btc, sol]);
 assert.deepEqual(marketWatchlist(added), [btc]);
 assert.throws(() => addMarketCoin(withSol, btc));
+assert.throws(() => addMarketCoin(withSol, legacyBox));
+assert.deepEqual(marketWatchlist(addMarketCoin(untouched, customBox)), [customBox]);
 const removed = removeMarketCoin(withSol, 'BTC');
 assert.deepEqual(marketWatchlist(removed), [sol]);
 assert.deepEqual(marketWatchlist(withSol), [btc, sol]);
@@ -86,7 +91,28 @@ const oldBackup = structuredClone(ledger); delete oldBackup.digital.marketWatchl
 validate(oldBackup); assert.deepEqual(marketWatchlist(oldBackup.digital), []);
 const invalidBackup = structuredClone(ledger); invalidBackup.digital.marketWatchlist = [{ ...btc, priceId: 'solana' }];
 assert.throws(() => validate(invalidBackup));
-console.log('PASS: optional per-book watchlists, bounded and validated identities, immutable add/remove, precise valuations, manual fallback, missing quote accounting, legacy automatic quote removal and full JSON backup compatibility');
+// Previously saved BOX assets, balances and transactions remain accessible without that market.
+const boxBackup = structuredClone(ledger);
+boxBackup.digital.marketWatchlist.push(legacyBox);
+boxBackup.digital.assets.push({ id: 'box', symbol: 'BOX', name: 'BOX', priceId: '', network: '' });
+boxBackup.digital.manualBalances.push({ id: 'w|box', wallet: 'w', asset: 'box', quantity: '3.123456789012345678', updated: new Date(now).toISOString(), note: 'Saved holding' });
+boxBackup.digital.events.push({ id: 'box-opening', type: 'opening', date: new Date(now).toISOString().slice(0, 10), created: new Date(now).toISOString(), wallet: 'w', asset: 'box', quantity: '2', fiatCNY: 12000, txHash: '', note: 'Saved transaction', status: 'posted' });
+boxBackup.digital.quotes.box = { priceCNY: '50', source: '手动录入', at: new Date(now).toISOString() };
+const restoredBox = JSON.parse(JSON.stringify({ version: 4, ledger: boxBackup })).ledger;
+assert.doesNotThrow(() => validate(restoredBox));
+assert.deepEqual(marketWatchlist(restoredBox.digital), [usdt, sol]);
+const compatibleBox = withMarketPrices(restoredBox.digital, prices, now);
+assert.deepEqual(compatibleBox.assets, boxBackup.digital.assets);
+assert.deepEqual(compatibleBox.events, boxBackup.digital.events);
+assert.deepEqual(compatibleBox.manualBalances, boxBackup.digital.manualBalances);
+assert.equal(compatibleBox.quotes.box.priceCNY, '50');
+assert.equal(digitalPositions(compatibleBox, '').positions.find(p => p.asset === 'box').quantity, '3.123456789012345678');
+assert.throws(() => addMarketCoin(restoredBox.digital, legacyBox));
+const editedLegacy = addMarketCoin(restoredBox.digital, btc);
+assert.deepEqual(marketWatchlist(editedLegacy), [usdt, sol, btc]);
+validate({ ...restoredBox, digital: editedLegacy });
+
+console.log('PASS: optional per-book watchlists, bounded and validated identities, immutable add/remove, precise valuations, manual fallback, missing quote accounting, legacy automatic quote removal, removed BOX holdings preservation and full JSON backup compatibility');
 
 // A legal large balance with no manual price must not make the app unusable when live prices arrive.
 const safetyPrices = parseMarketPrices({

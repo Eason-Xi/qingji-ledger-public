@@ -1,12 +1,11 @@
-import { BOX_SOURCE, fetchBoxQuote } from './box-price.ts';
 import type { DigitalBook, MarketCoin } from './extensions.ts';
-import { MARKET_PRESETS, marketWatchlist, validateMarketWatchlist } from './market-watchlist.ts';
+import { MARKET_PRESETS, isRetiredMarketCoin, marketWatchlist, validateMarketWatchlist } from './market-watchlist.ts';
 import { digitalPositions, units, valuation } from './digital.ts';
 
-export const MAIN_COINS = MARKET_PRESETS.slice(0, 3);
+export const MAIN_COINS = MARKET_PRESETS;
 export const SUPPORTED_COINS = MARKET_PRESETS;
 export type MarketQuote = { priceCNY: string; priceUSD: string; source: string; at: string; change24h: number | null; priceId?: string; tradeAt?: string; priceUSDT?: string };
-export type MarketPrices = { quotes: Record<string, MarketQuote>; stale: boolean; fetchedAt: string; boxError?: string; errors?: Record<string, string> };
+export type MarketPrices = { quotes: Record<string, MarketQuote>; stale: boolean; fetchedAt: string; errors?: Record<string, string> };
 export const MAX_PRICE_AGE = 15 * 60 * 1000;
 const TTL = 60 * 1000;
 export const priceURL = (coins: readonly MarketCoin[]) => 'https://api.coingecko.com/api/v3/simple/price?ids=' + coins.map(c => encodeURIComponent(c.priceId)).join(',') + '&vs_currencies=cny,usd&include_last_updated_at=true&include_24hr_change=true&precision=8';
@@ -44,9 +43,7 @@ export function createMarketPriceService(fetcher: typeof fetch = (input, init) =
     const selections = new Map<string, Cache>();
     const fetchOptions = () => ({ headers: { Accept: 'application/json', 'User-Agent': 'Qingji-Ledger/1.0' }, signal: AbortSignal.timeout(6000) });
     async function fetchMarket(selected: readonly MarketCoin[]): Promise<MarketPrices> {
-        const wantsBox = selected.some(c => c.symbol === 'BOX');
-        const coins = selected.filter(c => c.symbol !== 'BOX');
-        if (wantsBox && !coins.some(c => c.symbol === 'USDT')) coins.push(MARKET_PRESETS[2]);
+        const coins = selected;
         const quotes: Record<string, MarketQuote> = {};
         const collect = (data: unknown, source: string, requested: readonly MarketCoin[]) => {
             try { Object.assign(quotes, parseMarketPrices(data, now(), source, requested).quotes); } catch { /* Try other sources for missing coins. */ }
@@ -80,18 +77,14 @@ export function createMarketPriceService(fetcher: typeof fetch = (input, init) =
             if (body.symbol !== coin.symbol) return;
             collect({ [coin.priceId]: { cny: body.quotes?.CNY?.price, usd: body.quotes?.USD?.price, cny_24h_change: body.quotes?.CNY?.percent_change_24h, last_updated_at: Date.parse(body.last_updated || '') / 1000 } }, 'CoinPaprika', [coin]);
         }));
-        let boxError: string | undefined;
-        if (wantsBox) {
-            try { quotes.BOX = await fetchBoxQuote(fetcher, quotes.USDT, now); }
-            catch { boxError = 'BOX 行情暂不可用，或最近成交超过 24 小时；可填写手动参考单价。'; }
-        }
         const wanted = new Set(selected.map(c => c.symbol));
         const visible = Object.fromEntries(Object.entries(quotes).filter(([symbol]) => wanted.has(symbol)));
-        const errors = Object.fromEntries(selected.filter(c => !visible[c.symbol]).map(c => [c.symbol, c.symbol === 'BOX' ? boxError! : '行情暂不可用，请检查币种 ID、稍后刷新或填写手动参考单价。']));
-        return { quotes: visible, errors, boxError, stale: Object.values(visible).some(q => now() - Date.parse(q.at) > 5 * TTL), fetchedAt: new Date(now()).toISOString() };
+        const errors = Object.fromEntries(selected.filter(c => !visible[c.symbol]).map(c => [c.symbol, '行情暂不可用，请检查币种 ID、稍后刷新或填写手动参考单价。']));
+        return { quotes: visible, errors, stale: Object.values(visible).some(q => now() - Date.parse(q.at) > 5 * TTL), fetchedAt: new Date(now()).toISOString() };
     }
-    return async function getPrices(selected: readonly MarketCoin[] = []): Promise<MarketPrices> {
-        validateMarketWatchlist(selected);
+    return async function getPrices(selection: readonly MarketCoin[] = []): Promise<MarketPrices> {
+        validateMarketWatchlist(selection);
+        const selected = selection.filter(coin => !isRetiredMarketCoin(coin));
         if (!selected.length) return { quotes: {}, stale: false, fetchedAt: new Date(now()).toISOString() };
         const key = JSON.stringify(selected.map(c => [c.symbol, c.priceId]).sort((a, b) => a[0].localeCompare(b[0])));
         let entry = selections.get(key);
@@ -129,7 +122,7 @@ export function createMarketPriceService(fetcher: typeof fetch = (input, init) =
 export function withMarketPrices(book: DigitalBook, prices: MarketPrices | null, now = Date.now()): DigitalBook {
     const quotes = { ...book.quotes };
     // Stored manual prices survive removing a market. Legacy auto prices need a fresh selected quote.
-    for (const [asset, quote] of Object.entries(quotes)) if (['CoinGecko', 'Coinbase', 'CoinPaprika', BOX_SOURCE].includes(quote.source)) delete quotes[asset];
+    for (const [asset, quote] of Object.entries(quotes)) if (['CoinGecko', 'Coinbase', 'CoinPaprika', 'BigONE BOX/USDT'].includes(quote.source)) delete quotes[asset];
     const selected = marketWatchlist(book);
     const positions = digitalPositions({ ...book, quotes }, '').positions;
     let total = positions.reduce((sum, pos) => sum + BigInt(pos.value || 0), 0n);

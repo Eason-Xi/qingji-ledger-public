@@ -51,16 +51,34 @@ marketBackup.ledger.digital.marketWatchlist=[];
 assert.equal((await request('/api/ledger?book='+marketBookB.id,'PUT',{ledger:marketBackup.ledger,revision:2,action:'移除全部行情'})).status,200);
 assert.deepEqual((await request('/api/ledger?book='+marketBookB.id)).data.ledger.digital.marketWatchlist,[]);
 assert.equal((await request('/api/ledger?book='+book.id)).data.ledger.digital.marketWatchlist[0].symbol,'BTC');
+// A pre-removal backup can still be restored; the hidden market does not delete saved assets.
+const legacyBoxBook=(await request('/api/books','POST',{name:'旧版资产备份'})).data.book;
+const oldBoxBackup=structuredClone(initial);oldBoxBackup.digital={
+ ...emptyDigital(),marketWatchlist:[{symbol:'BOX',name:'BOX（李笑来）',priceId:''}],
+ wallets:[{id:'old-wallet',name:'Synthetic wallet',kind:'wallet',network:''}],
+ assets:[{id:'old-box',symbol:'BOX',name:'BOX',priceId:'',network:''}],
+ events:[{id:'old-opening',type:'opening',date:'2026-10-21',created:'2026-10-21T00:00:00Z',wallet:'old-wallet',asset:'old-box',quantity:'2',fiatCNY:10000,txHash:'',note:'Saved synthetic transaction',status:'posted'}],
+ manualBalances:[{id:'old-wallet|old-box',wallet:'old-wallet',asset:'old-box',quantity:'3.123456789012345678',updated:'2026-10-21T00:00:00Z',note:'Saved synthetic balance'}],
+ quotes:{'old-box':{priceCNY:'50',source:'手动录入',at:'2026-10-21T00:00:00Z'}},
+};
+validate(oldBoxBackup);
+assert.equal((await request('/api/ledger?book='+legacyBoxBook.id,'PUT',{ledger:oldBoxBackup,revision:0,action:'恢复旧版备份'})).status,200);
+const restoredOldBox=(await request('/api/ledger?book='+legacyBoxBook.id)).data.ledger.digital;
+assert.deepEqual(marketWatchlist(restoredOldBox),[]);
+for(const field of ['assets','events','manualBalances','quotes'])assert.deepEqual(restoredOldBox[field],oldBoxBackup.digital[field]);
 const api2=createBrowserAPI(factory,'test-ledger');const base=(await request('/api/ledger')).data;
 const concurrent=await Promise.all([api.request('/api/ledger',{method:'PUT',body:JSON.stringify({ledger,revision:base.revision})}),api2.request('/api/ledger',{method:'PUT',body:JSON.stringify({ledger,revision:base.revision})})]);assert.deepEqual(concurrent.map(r=>r.status).sort(),[200,409]);
 await api2.close();await api.close();
 const reopened=createBrowserAPI(factory,'test-ledger');const reopenedData=await(await reopened.request('/api/ledger')).json();assert.equal(reopenedData.ledger.transactions[0].id,'local-first');assert.equal(reopenedData.owner,catalog.owner);
 assert.equal((await(await reopened.request('/api/ledger?book='+book.id)).json()).ledger.digital.marketWatchlist[0].symbol,'BTC');
 assert.deepEqual((await(await reopened.request('/api/ledger?book='+marketBookB.id)).json()).ledger.digital.marketWatchlist,[]);
+const reopenedOldBox=(await(await reopened.request('/api/ledger?book='+legacyBoxBook.id)).json()).ledger.digital;
+assert.deepEqual(marketWatchlist(reopenedOldBox),[]);
+for(const field of ['assets','events','manualBalances','quotes'])assert.deepEqual(reopenedOldBox[field],oldBoxBackup.digital[field]);
 const separate=createBrowserAPI(new IDBFactory(),'test-ledger');const separateData=await(await separate.request('/api/ledger')).json();assert.equal(separateData.ledger.transactions.length,0);assert.notEqual(separateData.owner,catalog.owner);
 assert.equal(calls,0);assert.equal((await request('/api/ai/config','PUT',{apiKey:'synthetic-test-not-a-secret'})).status,405);assert.equal(calls,0);
 const unavailable=createBrowserAPI(undefined,'disabled');assert.equal((await unavailable.request('/api/books')).status,503);
 for(let n=1;n<50;n++)assert.equal((await separate.request('/api/books',{method:'POST',body:JSON.stringify({name:'账本'+n})})).status,201);
 assert.equal((await separate.request('/api/books',{method:'POST',body:JSON.stringify({name:'超过上限'})})).status,400);
 validate(sampleLedger());await reopened.close();await separate.close();await api.close();
-console.log('PASS: IndexedDB persistence, browser isolation, atomic CAS across tabs, book isolation, validation rollback, original histories and 20-version retention, synthetic sample separation, zero financial network requests, no API-key storage, watchlist persistence/history/JSON restoration and book isolation');
+console.log('PASS: IndexedDB persistence, browser isolation, atomic CAS across tabs, book isolation, validation rollback, original histories and 20-version retention, synthetic sample separation, zero financial network requests, no API-key storage, watchlist persistence/history/JSON restoration, removed BOX backup/holding preservation and book isolation');

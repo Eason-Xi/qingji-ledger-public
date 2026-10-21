@@ -4,8 +4,10 @@ export const MARKET_PRESETS = [
     { symbol: 'BTC', name: '比特币', priceId: 'bitcoin', fallbackId: 'btc-bitcoin' },
     { symbol: 'ETH', name: '以太坊', priceId: 'ethereum', fallbackId: 'eth-ethereum' },
     { symbol: 'USDT', name: '泰达币', priceId: 'tether', fallbackId: 'usdt-tether' },
-    { symbol: 'BOX', name: 'BOX（李笑来）', priceId: '', fallbackId: '' },
 ] as const;
+
+// Recognize the retired built-in entry only to keep existing backups readable.
+export const isRetiredMarketCoin = (coin: MarketCoin) => coin.symbol === 'BOX' && coin.priceId === '';
 
 export function validateMarketWatchlist(value: unknown): asserts value is MarketCoin[] {
     if (!Array.isArray(value) || value.length > 50) throw Error('行情列表最多添加 50 个币种');
@@ -13,7 +15,7 @@ export function validateMarketWatchlist(value: unknown): asserts value is Market
     for (const coin of value) {
         if (!coin || typeof coin.symbol !== 'string' || !/^[A-Z0-9][A-Z0-9._-]{0,29}$/.test(coin.symbol) ||
             typeof coin.name !== 'string' || !coin.name.trim() || coin.name !== coin.name.trim() || coin.name.length > 200 ||
-            typeof coin.priceId !== 'string' || (coin.symbol !== 'BOX' && !/^[a-z0-9][a-z0-9-]{0,99}$/.test(coin.priceId)))
+            typeof coin.priceId !== 'string' || (!isRetiredMarketCoin(coin) && !/^[a-z0-9][a-z0-9-]{0,99}$/.test(coin.priceId)))
             throw Error('请填写有效的币种符号、名称和 CoinGecko 币种 ID');
         const preset = MARKET_PRESETS.find(p => p.symbol === coin.symbol);
         if (preset && preset.priceId !== coin.priceId) throw Error(`${coin.symbol} 请使用已确认的行情来源`);
@@ -22,9 +24,10 @@ export function validateMarketWatchlist(value: unknown): asserts value is Market
     }
 }
 
-export const marketWatchlist = (book: DigitalBook): MarketCoin[] => book.marketWatchlist || [];
+export const marketWatchlist = (book: DigitalBook): MarketCoin[] => (book.marketWatchlist || []).filter(coin => !isRetiredMarketCoin(coin));
 export function addMarketCoin(book: DigitalBook, coin: MarketCoin): DigitalBook {
     const next = [...marketWatchlist(book), { symbol: coin.symbol.trim().toUpperCase(), name: coin.name.trim(), priceId: coin.priceId.trim().toLowerCase() }];
+    if (isRetiredMarketCoin(next[next.length - 1])) throw Error('此旧版内置行情已停用，请选择其他币种');
     validateMarketWatchlist(next);
     return { ...book, marketWatchlist: next };
 }
