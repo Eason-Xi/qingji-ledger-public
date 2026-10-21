@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import {initial,validate,balances,nativeBalances,totals} from '../lib/ledger.ts';
+import {emptyHK,hkSettlementAccounts,hkPortfolio} from '../lib/hk-securities.ts';
+import {accountRegion,hasHKDBalance} from '../lib/account-currency.ts';
+const l=structuredClone(initial);
+l.accounts.find(a=>a.id==='bank').opening=1000000;
+l.accounts.push({id:'hbank',name:'香港汇丰银行',kind:'asset',opening:12345,openingHKD:1000000,region:'hongkong',hkdToCNY:'0.9',hkdRateAt:'2026-10-20T00:00:00Z'},{id:'hk',name:'证券',kind:'asset',subtype:'securities',opening:0});
+l.hkSecurities={...emptyHK(),accounts:[{id:'hk',openingCashHKD:'0',hkdToCNY:'0.9',hkdToUSD:'0.128',ratesAt:'2026-10-20T00:00:00Z'}]};validate(l);
+const event=(id,patch={})=>({id,account:'hk',type:'deposit',symbol:'',name:'',quantity:0,priceHKD:'',feesHKD:'0',amountHKD:'1000',date:'2026-10-20',time:'',created:'2026-10-20T00:00:00Z',note:'',status:'posted',fiatAccount:'hbank',fiatCurrency:'HKD',fiatHKD:100000,...patch});
+const add=(base,e)=>{const n=structuredClone(base);n.accounts=hkSettlementAccounts(n,e);n.hkSecurities.events.push(e);validate(n);return n;};
+const net=x=>Object.values(balances(x)).reduce((sum,n)=>sum+n,0);
+assert.equal(balances(l).hbank,912345);
+const deposit=add(l,event('1'));assert.equal(nativeBalances(deposit).HKD.hbank,900000);assert.equal(nativeBalances(deposit).CNY.hbank,12345);assert.equal(balances(deposit).hbank,822345);assert.equal(hkPortfolio(deposit.hkSecurities).accounts[0].cash,100000);assert.equal(net(deposit),net(l));
+const out=add(deposit,event('2',{type:'withdrawal',amountHKD:'200',fiatHKD:20000}));assert.equal(nativeBalances(out).HKD.hbank,920000);assert.equal(hkPortfolio(out.hkSecurities).accounts[0].cash,80000);assert.equal(net(out),net(l));
+const mainland=add(out,event('3',{fiatAccount:'bank',fiatCurrency:'CNY',fiatCNY:9000,fiatHKD:undefined,amountHKD:'100'}));assert.equal(nativeBalances(mainland).CNY.bank,991000);assert.equal(nativeBalances(mainland).HKD.hbank,920000);assert.equal(net(mainland),net(l));
+const hkCNY=add(out,event('3',{fiatCurrency:'CNY',fiatCNY:9000,fiatHKD:undefined,amountHKD:'100'}));assert.equal(nativeBalances(hkCNY).CNY.hbank,3345);assert.equal(nativeBalances(hkCNY).HKD.hbank,920000);assert.equal(net(hkCNY),net(l));
+const legacy=add(out,event('3',{fiatCurrency:undefined,fiatCNY:9000,fiatHKD:undefined,amountHKD:'100'}));assert.deepEqual(balances(legacy),balances(hkCNY));
+const trade={type:'buy',symbol:'00700',name:'测试',quantity:100,priceHKD:'10',feesHKD:'10',amountHKD:'',fiatHKD:101000};
+const buy=add(out,event('3',trade));assert.equal(nativeBalances(buy).HKD.hbank,819000);assert.equal(hkPortfolio(buy.hkSecurities).accounts[0].cash,80000);assert.equal(net(buy),net(out));
+const sell=add(buy,event('4',{...trade,type:'sell',quantity:40,priceHKD:'12',feesHKD:'5',fiatHKD:47500}));assert.equal(nativeBalances(sell).HKD.hbank,866500);assert.equal(hkPortfolio(sell.hkSecurities).accounts[0].cash,80000);assert.equal(hkPortfolio(sell.hkSecurities).accounts[0].realized,7100);
+const voided=structuredClone(sell);voided.hkSecurities.events.at(-1).status='deleted';validate(voided);assert.deepEqual(balances(voided),balances(buy));voided.hkSecurities.events.at(-1).status='posted';validate(voided);assert.deepEqual(balances(voided),balances(sell));
+const changed=structuredClone(sell);changed.hkSecurities.events.at(-1).fiatHKD=47000;validate(changed);assert.equal(nativeBalances(changed).HKD.hbank,866000);
+for(const patch of [{fiatAccount:'bank'},{fiatCurrency:'USD'},{fiatCurrency:'CNY'},{fiatCNY:90000},{fiatHKD:0},{fiatHKD:-1},{fiatHKD:1.5},{fiatAccount:undefined}]){const n=structuredClone(l);n.hkSecurities.events.push(event('1',patch));assert.throws(()=>validate(n));}
+const inferred=structuredClone(l);delete inferred.accounts.find(a=>a.id==='hbank').region;delete inferred.accounts.find(a=>a.id==='hbank').hkdToCNY;delete inferred.accounts.find(a=>a.id==='hbank').hkdRateAt;inferred.accounts.find(a=>a.id==='hbank').openingHKD=0;validate(inferred);const initialized=add(inferred,event('1'));assert.equal(initialized.accounts.find(a=>a.id==='hbank').hkdToCNY,'0.9');assert.equal(initialized.accounts.find(a=>a.id==='hbank').region,undefined);
+const locked=structuredClone(deposit);locked.accounts.find(a=>a.id==='hbank').region='mainland';validate(locked);assert.deepEqual(balances(locked),balances(deposit));
+for(const hkdToCNY of ['0','-1','101','0.123456789','NaN']){const n=structuredClone(l);n.accounts.find(a=>a.id==='hbank').hkdToCNY=hkdToCNY;assert.throws(()=>validate(n));}
+const rateChange=structuredClone(deposit);rateChange.accounts.find(a=>a.id==='hbank').hkdToCNY='0.8';validate(rateChange);assert.equal(nativeBalances(rateChange).HKD.hbank,900000);assert.equal(nativeBalances(rateChange).CNY.hbank,12345);assert.equal(balances(rateChange).hbank,732345);
+assert.equal(accountRegion({name:'Hong Kong Bank',kind:'asset'}),'hongkong');assert.equal(hasHKDBalance({name:'HSBC内地',region:'mainland',kind:'asset'}),true);
+const restored=JSON.parse(JSON.stringify(sell));validate(restored);assert.deepEqual(nativeBalances(restored),nativeBalances(sell));assert.deepEqual(totals(sell.transactions),{income:0,expense:0});
+const inland=structuredClone(l);inland.accounts.find(a=>a.id==='bank').region='mainland';const inlandHKD=add(inland,event('mainland-hkd',{fiatAccount:'bank'}));assert.equal(inlandHKD.accounts.find(a=>a.id==='bank').region,'mainland');assert.equal(nativeBalances(inlandHKD).CNY.bank,1000000);assert.equal(nativeBalances(inlandHKD).HKD.bank,-100000);
+console.log('PASS: HKD/CNY bank balances, deposits/withdrawals, buys/sells, all-bank currency support without rewriting regions, legacy CNY preservation, edit/void/restore, account FX initialization, rate changes and backup');

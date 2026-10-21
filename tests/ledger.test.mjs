@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {initial,parseText,balances,totals,validate,cents,today} from '../lib/ledger.ts';
+let l=structuredClone(initial);const tx=(s)=>parseText(s,l).rows[0];
+assert.equal(cents('0.29'),29);assert.equal(cents('100.01'),10001);assert.throws(()=>cents('3.001'));
+let t=tx('今天麦当劳花 30');assert.equal(t.amount,3000);assert.equal(t.account,'cmb');assert.equal(t.category,'c0');l.transactions.push(t);assert.equal(balances(l).cmb,3000);assert.equal(totals(l.transactions).expense,3000);
+t=tx('用支付宝花 50');assert.equal(t.channel,'支付宝');assert.equal(t.account,'cmb');
+t=tx('用微信零钱付 50');assert.equal(t.account,'wechat');l.transactions.push(t);assert.equal(balances(l).wechat,-5000);assert.equal(balances(l).cmb,3000);
+t=tx('招商信用卡还款 3000');assert.equal(t.status,'pending');assert.ok(parseText('招商信用卡还款 3000',l).warnings.length);
+t=tx('借记卡转 100 到微信钱包');assert.equal(t.type,'transfer');assert.equal(t.account,'bank');assert.equal(t.to,'wechat');l.transactions.push(t);assert.equal(balances(l).bank,-10000);assert.equal(balances(l).wechat,5000);assert.equal(totals(l.transactions).expense,8000);
+t=tx('从借记卡给招商信用卡还款 30');l.transactions.push(t);validate(l);assert.equal(balances(l).cmb,0);assert.equal(totals(l.transactions).expense,8000);
+assert.equal(tx('微信转给朋友 500').status,'pending');assert.equal(parseText('早餐 18、打车 26',l).rows.length,2);
+assert.equal(tx('今天麦当劳花 30').status,'pending');
+const orig=l.transactions[0];const refund={...orig,id:crypto.randomUUID(),type:'refund',original:orig.id,amount:1000};l.transactions.push(refund);validate(l);assert.equal(totals(l.transactions).expense,7000);assert.equal(balances(l).cmb,-1000);assert.throws(()=>validate({...l,transactions:[...l.transactions,{...refund,id:crypto.randomUUID(),amount:2500}]}));
+assert.throws(()=>validate({...l,transactions:l.transactions.map(x=>x.id===orig.id?{...x,status:'deleted'}:x)}));
+assert.equal(parseText('昨天咖啡 20',l).rows[0].date<today(),true);
+const explicit=parseText('2026-10-09 09:05 咖啡三十点五元 #工作',initial).rows[0];assert.equal(explicit.amount,3050);assert.equal(explicit.date,'2026-10-09');assert.equal(explicit.time,'09:05');assert.equal(explicit.timezone,'Asia/Shanghai');assert.deepEqual(explicit.tags,['工作']);
+assert.equal(parseText('咖啡一百二元',initial).rows.length,0);
+console.log('PASS: money precision, defaults, channels, expenses, repayment, transfer, ambiguity, multi-entry, duplicate, linked refunds, invalid deletion, relative date');

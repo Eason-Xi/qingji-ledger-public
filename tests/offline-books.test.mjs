@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {initial} from '../lib/ledger.ts';
+import {readOffline,writeOffline,clearOffline,offlineConsent,setOfflineConsent,offlineBooks} from '../lib/offline.ts';
+const data=new Map();let full=false;
+globalThis.localStorage={getItem:key=>data.get(key)||null,setItem:(key,value)=>{if(full)throw Error('quota');data.set(key,value);},removeItem:key=>data.delete(key)};
+const entry=(owner,bookId,amount)=>({owner,bookId,bookName:bookId==='default'?'个人账本':'旅行账本',base:structuredClone(initial),ledger:{...structuredClone(initial),budget:amount},revision:1,pending:true,updated:'2026-10-21T00:00:00Z'});
+const old=entry('a','default',100);delete old.bookId;delete old.bookName;data.set('qingji-offline-v1',JSON.stringify(old));assert.equal(readOffline('default').ledger.budget,100);assert.equal(readOffline('travel'),null);
+full=true;assert.equal(writeOffline(entry('a','travel',200)),false);assert.equal(readOffline('default').ledger.budget,100);full=false;
+assert.equal(writeOffline(entry('a','travel',200)),true);assert.equal(data.has('qingji-offline-v1'),false);assert.equal(readOffline('default').ledger.budget,100);assert.equal(readOffline('travel').ledger.budget,200);assert.equal(readOffline().bookId,'travel');assert.deepEqual(offlineBooks().map(b=>b.id).sort(),['default','travel']);
+writeOffline({...entry('a','default',300),pending:false});assert.equal(readOffline('travel').pending,true);assert.equal(readOffline('default').pending,false);assert.equal(readOffline('default','b'),null);assert.equal(readOffline('__proto__'),null);
+writeOffline(entry('b','default',400));assert.equal(readOffline('travel'),null);assert.equal(readOffline('default','a'),null);assert.equal(readOffline('default','b').ledger.budget,400);
+setOfflineConsent(true);assert.equal(offlineConsent(),true);clearOffline();assert.equal(readOffline(),null);assert.deepEqual(offlineBooks(),[]);setOfflineConsent(false);assert.equal(offlineConsent(),false);
+data.set('qingji-offline-v2','{broken');assert.equal(readOffline(),null);assert.deepEqual(offlineBooks(),[]);
+data.set('qingji-offline-v2',JSON.stringify({owner:'a',last:'bad',books:{bad:null}}));assert.equal(readOffline(),null);assert.deepEqual(offlineBooks(),[]);
+console.log('PASS: per-book offline snapshots and pending edits, legacy cache migration, owner isolation, quota safety, no inherited-key access, clearing and corrupt-cache fallback');
