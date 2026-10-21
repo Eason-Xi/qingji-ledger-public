@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { MARKET_PRESETS, validateMarketWatchlist, marketWatchlist, normalizeMarketCoin, addMarketCoin, updateMarketCoin, removeMarketCoin } from '../lib/market-watchlist.ts';
+import { MARKET_PRESETS, DEFAULT_MARKET_COINS, MARKET_DEFAULTS_VERSION, addDefaultMarketCoins, validateMarketWatchlist, marketWatchlist, normalizeMarketCoin, addMarketCoin, updateMarketCoin, removeMarketCoin } from '../lib/market-watchlist.ts';
 import { withMarketPrices, parseMarketPrices, MAX_PRICE_AGE } from '../lib/market-prices.ts';
 import { emptyDigital, digitalPositions, valuation, units } from '../lib/digital.ts';
 import { initial, validate } from '../lib/ledger.ts';
@@ -13,7 +13,9 @@ const wrongBNB = { symbol: 'BNB', name: 'Saved custom BNB', priceId: 'another-bn
 const legacyBox = { symbol: 'BOX', name: 'BOX（李笑来）', priceId: '' };
 const customBox = { symbol: 'BOX', name: 'User supplied token', priceId: 'custom-box-token' };
 const sol = { symbol: 'SOL', name: 'Solana', priceId: 'solana' };
-assert.deepEqual(MARKET_PRESETS.map(c => c.symbol), ['BTC', 'ETH', 'USDT', 'BNB']);
+assert.deepEqual(MARKET_PRESETS.map(c => c.symbol), ['BTC', 'ETH', 'USDT', 'BNB', 'SOL', 'XRP', 'DOGE', 'USDC']);
+assert.deepEqual(DEFAULT_MARKET_COINS, MARKET_PRESETS.map(({ symbol, name, priceId }) => ({ symbol, name, priceId })));
+assert.equal(MARKET_DEFAULTS_VERSION, 1);
 assert.equal(bnb.priceId, 'binancecoin');
 assert.equal(MARKET_PRESETS.find(c => c.symbol === 'BNB').fallbackId, 'bnb-binance-coin');
 assert.deepEqual(marketWatchlist(emptyDigital()), []);
@@ -40,6 +42,42 @@ for (const value of [null, {}, 'BTC', [null], [{ ...sol, symbol: '' }], [{ ...so
 const capacity = Array.from({ length: 50 }, (_, n) => ({ symbol: 'T' + n, name: 'Test ' + n, priceId: 'test-' + n }));
 validateMarketWatchlist(capacity);
 assert.throws(() => validateMarketWatchlist([...capacity, { symbol: 'OVER', name: 'Over capacity', priceId: 'over' }]));
+
+// Defaults add visible reference markets only; user choices and every holding field survive unchanged.
+const seededEmpty = addDefaultMarketCoins(emptyDigital());
+assert.deepEqual(marketWatchlist(seededEmpty), DEFAULT_MARKET_COINS);
+assert.equal(seededEmpty.marketDefaultsVersion, 1);
+assert.deepEqual(emptyDigital(), { wallets: [], assets: [], events: [], quotes: {} });
+for (const field of ['wallets', 'assets', 'events', 'quotes']) assert.deepEqual(seededEmpty[field], emptyDigital()[field]);
+const customSol = { symbol: 'SOL', name: 'Saved custom identity', priceId: 'saved-sol-token' };
+const customBTCID = { symbol: 'WBTCREF', name: 'Saved Bitcoin reference', priceId: 'bitcoin' };
+const customDefaultsBook = { ...emptyDigital(), marketWatchlist: [customSol, wrongBNB, customBTCID, legacyBox] };
+const customDefaultsSnapshot = structuredClone(customDefaultsBook);
+const customSeeded = addDefaultMarketCoins(customDefaultsBook);
+assert.deepEqual(marketWatchlist(customSeeded).slice(0, 3), [customSol, wrongBNB, customBTCID]);
+assert.equal(marketWatchlist(customSeeded).some(c => c.symbol === 'BTC'), false); // An ID already selected under another symbol is not duplicated.
+assert.equal(marketWatchlist(customSeeded).some(c => c.symbol === 'BOX'), false);
+assert.equal(marketWatchlist(customSeeded).filter(c => c.symbol === 'SOL').length, 1);
+assert.equal(marketWatchlist(customSeeded).find(c => c.symbol === 'BNB').priceId, wrongBNB.priceId);
+assert.deepEqual(customDefaultsBook, customDefaultsSnapshot);
+assert.deepEqual(addDefaultMarketCoins(customSeeded), customSeeded); // Repeated explicit seeding is idempotent.
+const seededAlias = addDefaultMarketCoins({ ...emptyDigital(), marketWatchlist: [legacyBNB] });
+assert.equal(seededAlias.marketWatchlist[0].priceId, 'bnb'); // Stored legacy IDs are preserved; reading resolves the confirmed alias.
+assert.equal(marketWatchlist(seededAlias)[0].priceId, 'binancecoin');
+const fullSeeded = addDefaultMarketCoins({ ...emptyDigital(), marketWatchlist: capacity });
+assert.deepEqual(fullSeeded.marketWatchlist, capacity);
+assert.equal(fullSeeded.marketDefaultsVersion, 1);
+const nearlyFull = addDefaultMarketCoins({ ...emptyDigital(), marketWatchlist: capacity.slice(0, 49) });
+assert.equal(nearlyFull.marketWatchlist.length, 50);
+assert.deepEqual(nearlyFull.marketWatchlist.slice(0, 49), capacity.slice(0, 49));
+assert.equal(nearlyFull.marketWatchlist[49].symbol, 'BTC');
+const withoutDefaultBNB = removeMarketCoin(seededEmpty, 'BNB');
+assert.equal(withoutDefaultBNB.marketDefaultsVersion, 1); // Removal preserves the one-time migration marker.
+assert.equal(marketWatchlist(withoutDefaultBNB).some(c => c.symbol === 'BNB'), false);
+assert.equal(marketWatchlist(addDefaultMarketCoins(withoutDefaultBNB)).some(c => c.symbol === 'BNB'), true); // Explicit helper use may refill.
+for (const symbol of ['BNB', 'SOL', 'XRP', 'DOGE', 'USDC']) validateMarketWatchlist([{ symbol, name: 'Saved custom ' + symbol, priceId: 'saved-' + symbol.toLowerCase() }]);
+for (const marker of [0, 2, -1, '1', null]) assert.throws(() => validate({ ...structuredClone(initial), digital: { ...emptyDigital(), marketDefaultsVersion: marker } }));
+validate({ ...structuredClone(initial), digital: seededEmpty });
 
 const untouched = emptyDigital(), original = structuredClone(untouched);
 const added = addMarketCoin(untouched, btc);
@@ -69,6 +107,9 @@ const editableSnapshot = structuredClone(editable);
 const corrected = updateMarketCoin(editable, 'BNB', { ...legacyBNB, name: 'Corrected BNB' });
 assert.deepEqual(marketWatchlist(corrected), [btc, { ...bnb, name: 'Corrected BNB' }, sol]);
 for (const field of ['wallets', 'assets', 'events', 'manualBalances', 'quotes']) assert.deepEqual(corrected[field], editable[field]);
+assert.deepEqual(editable, editableSnapshot);
+const seededHoldings = addDefaultMarketCoins(editable);
+for (const field of ['wallets', 'assets', 'events', 'manualBalances', 'quotes']) assert.deepEqual(seededHoldings[field], editable[field]);
 assert.deepEqual(editable, editableSnapshot);
 assert.throws(() => updateMarketCoin(editable, 'MISSING', bnb));
 assert.throws(() => updateMarketCoin(editable, 'BNB', { ...bnb, symbol: 'SOL' }));

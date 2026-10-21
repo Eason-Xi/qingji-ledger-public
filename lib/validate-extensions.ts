@@ -76,6 +76,7 @@ export function validateExtensions(l: Ledger) {
     }
     if (l.digital) {
         const d = l.digital;
+        if (d.marketDefaultsVersion !== undefined && d.marketDefaultsVersion !== 1) throw Error('默认行情版本无效');
         if (d.marketWatchlist !== undefined) validateMarketWatchlist(d.marketWatchlist);
         if (!Array.isArray(d.wallets) || !Array.isArray(d.assets) || !Array.isArray(d.events) || typeof d.quotes !== 'object' || !d.quotes || d.wallets.length > 100 || d.assets.length > 200 || d.events.length > 10000)
             throw Error('数字资产账本无效');

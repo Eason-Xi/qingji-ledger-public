@@ -5,7 +5,7 @@ import { MARKET_PRESETS } from '../lib/market-watchlist.ts';
 const selection = [...MAIN_COINS];
 const legacyBox = { symbol: 'BOX', name: 'BOX（李笑来）', priceId: '' };
 const legacyBoxSource = 'BigONE BOX/USDT';
-assert.deepEqual(SUPPORTED_COINS.map(c => c.symbol), ['BTC', 'ETH', 'USDT', 'BNB']);
+assert.deepEqual(SUPPORTED_COINS.map(c => c.symbol), ['BTC', 'ETH', 'USDT', 'BNB', 'SOL', 'XRP', 'DOGE', 'USDC']);
 assert.deepEqual(MAIN_COINS.map(c => c.symbol), ['BTC', 'ETH', 'USDT']);
 const bnb = MARKET_PRESETS.find(c => c.symbol === 'BNB');
 const legacyBNB = { symbol: 'BNB', name: 'BNB', priceId: 'bnb' };
@@ -259,3 +259,72 @@ assert.equal(partial.quotes.SOL, undefined); assert.equal(partial.quotes.ETH, un
 const guarded = createMarketPriceService(async () => { throw Error('Invalid selections must be rejected before network'); }, () => now);
 await assert.rejects(guarded([{ symbol: 'BTC', name: 'Impostor', priceId: 'solana' }]));
 console.log('PASS: empty lists make zero network calls, dynamic USD/CNY quotes, scoped pending/cache isolation, order-normalized cache, removed BOX compatibility, explicit custom IDs, partial availability and preset identity validation');
+
+// Every seeded mainstream market uses its own verified identity and has both USD/CNY prices.
+const mainstream = [
+    { symbol: 'BTC', priceId: 'bitcoin', fallbackId: 'btc-bitcoin', cny: 500000.12345678, usd: 70000.12345678 },
+    { symbol: 'ETH', priceId: 'ethereum', fallbackId: 'eth-ethereum', cny: 20000.12345678, usd: 2800.12345678 },
+    { symbol: 'USDT', priceId: 'tether', fallbackId: 'usdt-tether', cny: 7.12345678, usd: 0.99976543 },
+    { symbol: 'BNB', priceId: 'binancecoin', fallbackId: 'bnb-binance-coin', cny: 5000.12345678, usd: 750.12345678 },
+    { symbol: 'SOL', priceId: 'solana', fallbackId: 'sol-solana', cny: 1000.12345678, usd: 140.12345678 },
+    { symbol: 'XRP', priceId: 'ripple', fallbackId: 'xrp-xrp', cny: 20.12345678, usd: 2.12345678 },
+    { symbol: 'DOGE', priceId: 'dogecoin', fallbackId: 'doge-dogecoin', cny: 1.12345678, usd: 0.12345678 },
+    { symbol: 'USDC', priceId: 'usd-coin', fallbackId: 'usdc-usd-coin', cny: 7.12345678, usd: 1.00012345 },
+];
+assert.deepEqual(MARKET_PRESETS.map(({ symbol, priceId, fallbackId }) => ({ symbol, priceId, fallbackId })), mainstream.map(({ symbol, priceId, fallbackId }) => ({ symbol, priceId, fallbackId })));
+const mainstreamSelection = MARKET_PRESETS.map(({ symbol, name, priceId }) => ({ symbol, name, priceId }));
+const allPrimaryFixture = Object.fromEntries(mainstream.map(c => [c.priceId, { cny: c.cny, usd: c.usd, cny_24h_change: 0.25, last_updated_at: now / 1000 }]));
+let allPrimaryCalls = 0;
+const allPrimary = createMarketPriceService(async url => {
+    allPrimaryCalls++; assert.ok(isPrimary(url));
+    assert.deepEqual(requestedIDs(url), mainstream.map(c => c.priceId).sort());
+    return Response.json(allPrimaryFixture);
+}, () => now);
+const allPrimaryQuotes = await allPrimary(mainstreamSelection);
+assert.equal(allPrimaryCalls, 1);
+assert.deepEqual(Object.keys(allPrimaryQuotes.quotes), mainstream.map(c => c.symbol));
+for (const coin of mainstream) {
+    assert.equal(allPrimaryQuotes.quotes[coin.symbol].priceId, coin.priceId);
+    assert.equal(allPrimaryQuotes.quotes[coin.symbol].priceCNY, String(coin.cny));
+    assert.equal(allPrimaryQuotes.quotes[coin.symbol].priceUSD, String(coin.usd));
+}
+const allCrossRates = { CNY: '7.25', BTC: '0.00001', ETH: '0.0005', USDT: '1.001', BNB: '0.00125', SOL: '0.00625', XRP: '0.4', DOGE: '8', USDC: '0.9999' };
+const allCross = createMarketPriceService(async url => url === COINBASE_URL ? Response.json({ data: { currency: 'USD', rates: allCrossRates } }) : new Response('unavailable', { status: 503 }), () => now);
+const allCrossQuotes = (await allCross(mainstreamSelection)).quotes;
+for (const coin of mainstream) {
+    assert.equal(allCrossQuotes[coin.symbol].source, 'Coinbase');
+    assert.equal(allCrossQuotes[coin.symbol].priceId, coin.priceId);
+    assert.ok(Number(allCrossQuotes[coin.symbol].priceUSD) > 0);
+    assert.ok(Number(allCrossQuotes[coin.symbol].priceCNY) > 0);
+    assert.ok(Math.abs(Number(allCrossQuotes[coin.symbol].priceCNY) / Number(allCrossQuotes[coin.symbol].priceUSD) - 7.25) < 0.000001);
+}
+const allFallbackIDs = [];
+const allFallback = createMarketPriceService(async url => {
+    if (isPrimary(url) || url === COINBASE_URL) return new Response('unavailable', { status: 503 });
+    const parsed = new URL(String(url)), id = parsed.pathname.split('/').pop();
+    assert.equal(parsed.origin, 'https://api.coinpaprika.com');
+    assert.equal(parsed.searchParams.get('quotes'), 'CNY,USD');
+    const coin = mainstream.find(c => c.fallbackId === id); assert.ok(coin, 'Unexpected fallback identity: ' + id);
+    allFallbackIDs.push(id);
+    return Response.json({ id, symbol: coin.symbol, last_updated: new Date(now).toISOString(), quotes: { CNY: { price: coin.cny }, USD: { price: coin.usd } } });
+}, () => now);
+const allFallbackQuotes = (await allFallback(mainstreamSelection)).quotes;
+assert.deepEqual(allFallbackIDs.sort(), mainstream.map(c => c.fallbackId).sort());
+for (const coin of mainstream) {
+    assert.equal(allFallbackQuotes[coin.symbol].source, 'CoinPaprika');
+    assert.equal(allFallbackQuotes[coin.symbol].priceId, coin.priceId);
+    assert.equal(allFallbackQuotes[coin.symbol].priceCNY, String(coin.cny));
+    assert.equal(allFallbackQuotes[coin.symbol].priceUSD, String(coin.usd));
+}
+for (const symbol of ['SOL', 'XRP', 'DOGE', 'USDC']) {
+    const coin = { symbol, name: 'Historical custom ' + symbol, priceId: 'saved-' + symbol.toLowerCase() };
+    const identityURLs = [];
+    const customIdentity = createMarketPriceService(async url => {
+        identityURLs.push(String(url)); assert.ok(isPrimary(url));
+        assert.deepEqual(requestedIDs(url), [coin.priceId]);
+        return Response.json({});
+    }, () => now);
+    await assert.rejects(customIdentity([coin]), /暂时不可用/);
+    assert.equal(identityURLs.length, 1); // Preset ticker alone cannot redirect a saved custom identity.
+}
+console.log('PASS: all eight default markets have explicit provider identities, dual-currency primary/Coinbase/CoinPaprika fixtures and no ticker-only custom fallback');

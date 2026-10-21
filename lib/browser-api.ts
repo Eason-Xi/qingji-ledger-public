@@ -4,12 +4,18 @@ import { createMarketPriceService } from './market-prices.ts';
 import { createHKRateService } from './hk-rates.ts';
 import { sampleLedger } from './sample-ledger.ts';
 import { newId } from './ids.ts';
+import { emptyDigital } from './digital.ts';
+import { addDefaultMarketCoins, MARKET_DEFAULTS_VERSION } from './market-watchlist.ts';
 
 type StoredLedger = { bookId: string; ledger: Ledger; revision: number; updated: string };
 type Snapshot = StoredLedger & { id: string; action: string; created: string };
 class LocalError extends Error { readonly status: number; constructor(message: string, status = 400) { super(message); this.status = status; } }
 const requestValue = <T>(request: IDBRequest<T>) => new Promise<T>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
 const reply = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
+const freshLedger = (source: Ledger = initial): Ledger => {
+    const ledger = structuredClone(source);
+    return { ...ledger, digital: addDefaultMarketCoins(ledger.digital || emptyDigital()) };
+};
 
 async function transaction<T>(db: IDBDatabase, mode: IDBTransactionMode, operation: (store: (name: string) => IDBObjectStore) => Promise<T>) {
     const tx = db.transaction(['books', 'ledgers', 'history', 'meta'], mode);
@@ -24,13 +30,14 @@ export function createBrowserAPI(factory: IDBFactory | undefined = globalThis.in
     async function database() {
         if (!factory) throw new LocalError('浏览器未提供本地数据库，请换用正常浏览模式并允许网站存储', 503);
         opening ??= new Promise<IDBDatabase>((resolve, reject) => {
-            const request = factory.open(databaseName, 1);
+            const request = factory.open(databaseName, 2);
             request.onupgradeneeded = () => {
                 const db = request.result;
-                db.createObjectStore('books', { keyPath: 'id' });
-                db.createObjectStore('ledgers', { keyPath: 'bookId' });
-                db.createObjectStore('meta', { keyPath: 'id' });
-                db.createObjectStore('history', { keyPath: ['bookId', 'id'] }).createIndex('book', 'bookId');
+                if (!db.objectStoreNames.contains('books')) db.createObjectStore('books', { keyPath: 'id' });
+                if (!db.objectStoreNames.contains('ledgers')) db.createObjectStore('ledgers', { keyPath: 'bookId' });
+                if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'id' });
+                const history = db.objectStoreNames.contains('history') ? request.transaction!.objectStore('history') : db.createObjectStore('history', { keyPath: ['bookId', 'id'] });
+                if (!history.indexNames.contains('book')) history.createIndex('book', 'bookId');
             };
             request.onerror = () => reject(request.error);
             request.onblocked = () => reject(new LocalError('请关闭其他旧版账本标签页后重试', 503));
@@ -41,7 +48,21 @@ export function createBrowserAPI(factory: IDBFactory | undefined = globalThis.in
                 if (!await requestValue(store('meta').get('owner'))) store('meta').put({ id: 'owner', value: 'browser-' + newId() });
                 if (!await requestValue(store('books').get(DEFAULT_BOOK_ID))) {
                     store('books').put({ id: DEFAULT_BOOK_ID, name: DEFAULT_BOOK_NAME, created: now, updated: now });
-                    store('ledgers').put({ bookId: DEFAULT_BOOK_ID, ledger: structuredClone(initial), revision: 0, updated: now });
+                    store('ledgers').put({ bookId: DEFAULT_BOOK_ID, ledger: freshLedger(), revision: 0, updated: now });
+                }
+                // One atomic migration per book; a later user removal or backup restore stays intact.
+                const ledgers = await requestValue(store('ledgers').getAll()) as StoredLedger[];
+                for (const current of ledgers) {
+                    if (current.ledger.digital?.marketDefaultsVersion === MARKET_DEFAULTS_VERSION) continue;
+                    const ledger = { ...current.ledger, digital: addDefaultMarketCoins(current.ledger.digital || emptyDigital()) };
+                    validate(ledger);
+                    const history = await requestValue(store('history').index('book').getAll(current.bookId)) as Snapshot[];
+                    if (!history.some(row => row.revision === current.revision)) store('history').put({ ...current, id: newId(), created: current.updated, action: '添加默认行情前的账本' });
+                    const next: StoredLedger = { ...current, ledger, revision: current.revision + 1, updated: now };
+                    store('ledgers').put(next);
+                    store('history').put({ ...next, id: newId(), created: now, action: '已补齐主流币行情' });
+                    const snapshots = await requestValue(store('history').index('book').getAll(current.bookId)) as Snapshot[];
+                    for (const old of snapshots.sort((a, b) => b.revision - a.revision).slice(20)) store('history').delete([current.bookId, old.id]);
                 }
             });
             return db;
@@ -81,7 +102,7 @@ export function createBrowserAPI(factory: IDBFactory | undefined = globalThis.in
                     if (method === 'POST') {
                         if (books.length >= 50) throw new LocalError('最多可创建50个账本');
                         book = { id: newId(), name, created: now, updated: now };
-                        store('ledgers').put({ bookId: book.id, ledger: body.example === true ? sampleLedger() : structuredClone(initial), revision: 0, updated: now });
+                        store('ledgers').put({ bookId: book.id, ledger: freshLedger(body.example === true ? sampleLedger() : initial), revision: 0, updated: now });
                     } else {
                         const previous = books.find(b => b.id === bookId);
                         if (!previous) throw new LocalError('账本不存在', 404);
@@ -99,6 +120,8 @@ export function createBrowserAPI(factory: IDBFactory | undefined = globalThis.in
                     validate(body.ledger);
                     if (body.revision !== current.revision) return reply({ ...current, owner, conflict: true, error: '另一个标签页已更新账本，请核对合并后重试' }, 409);
                     const ledger: Ledger = structuredClone(body.ledger);
+                    // Older backups have no initialization marker; restoring their choices must not reseed them.
+                    ledger.digital = { ...(ledger.digital || emptyDigital()), marketDefaultsVersion: MARKET_DEFAULTS_VERSION };
                     ledger.preferences = { ...ledger.preferences, cloudAI: false };
                     const next: StoredLedger = { bookId, ledger, revision: current.revision + 1, updated: new Date().toISOString() };
                     store('ledgers').put(next);

@@ -90,6 +90,7 @@ export type DigitalBook = {
     events: DigitalEvent[];
     manualBalances?: DigitalBalance[];
     marketWatchlist?: MarketCoin[];
+    marketDefaultsVersion?: 1;
     quotes: Record<string, {
         priceCNY: string;
         source: string;

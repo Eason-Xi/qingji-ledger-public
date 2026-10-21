@@ -51,7 +51,7 @@ export function MarketWatchlistPanel({ book, update, busy, market, priceError, p
                 <small>{available && quote!.change24h !== null ? `24h (CNY) ${quote!.change24h >= 0 ? '+' : ''}${quote!.change24h.toFixed(2)}%` : available && quote!.source === 'Coinbase' ? '人民币按美元交叉汇率换算' : '24h 涨跌暂无数据'}</small>
                 <small>{available ? `${quote!.source} · ${quote!.source === 'Coinbase' ? '获取时间 ' : '报价时间 '}${timestamp(quote!.at)}` : market?.errors?.[coin.symbol] || '等待有效报价'}</small>
             </article>;
-        })}</div> : <div className="market-empty"><h3>添加你关注的第一个币种</h3><p>支持 BTC、ETH、USDT、BNB，也可以添加其他 CoinGecko 币种。<br/>未添加时不请求行情，资产仍可使用手动参考单价。</p><button className="secondary" disabled={busy} onClick={open}><Plus size={16}/>选择币种</button></div>}
+        })}</div> : <div className="market-empty"><h3>添加你关注的第一个币种</h3><p>支持 BTC、ETH、USDT、BNB、SOL、XRP、DOGE、USDC，也可以添加其他 CoinGecko 币种。<br/>未添加时不请求行情，资产仍可使用手动参考单价。</p><button className="secondary" disabled={busy} onClick={open}><Plus size={16}/>选择币种</button></div>}
         {priceError && <p className="muted" role="status">{priceError}</p>}
         {error && !draft && <p className="error" role="alert">{error}</p>}
         <p className="digital-market-attribution">关注列表仅保存在当前账本，并随完整备份导出。移除行情只停止关注与自动估值，资产数量及手动参考价保留。{selected.length > 0 && <> 行情来自 <a href="https://www.coingecko.com/en/api" target="_blank" rel="noreferrer">CoinGecko</a> / <a href="https://www.coinbase.com/" target="_blank" rel="noreferrer">Coinbase</a> / <a href="https://coinpaprika.com/" target="_blank" rel="noreferrer">CoinPaprika</a>，为市场参考价。</>}</p>

@@ -4,18 +4,18 @@ import { createBrowserAPI } from '../lib/browser-api.ts';
 import { initial, validate, nativeBalances } from '../lib/ledger.ts';
 import { sampleLedger } from '../lib/sample-ledger.ts';
 import { emptyDigital } from '../lib/digital.ts';
-import { MARKET_PRESETS, marketWatchlist, updateMarketCoin } from '../lib/market-watchlist.ts';
+import { MARKET_PRESETS, DEFAULT_MARKET_COINS, addDefaultMarketCoins, marketWatchlist, updateMarketCoin } from '../lib/market-watchlist.ts';
 const factory=new IDBFactory();let calls=0;
 const api=createBrowserAPI(factory,'test-ledger',async()=>{calls++;throw Error('No network permitted in financial storage tests');});
 const request=async(path,method='GET',body)=>{const r=await api.request(path,{method,...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,data:await r.json()};};
 const catalog=(await request('/api/books')).data;assert.equal(catalog.books.length,1);assert.equal(catalog.books[0].id,'default');assert.match(catalog.owner,/^browser-/);
-const first=(await request('/api/ledger')).data;assert.equal(first.revision,0);assert.deepEqual(first.ledger,initial);assert.equal(first.owner,catalog.owner);
+const first=(await request('/api/ledger')).data;assert.equal(first.revision,0);assert.deepEqual(first.ledger,{...structuredClone(initial),digital:addDefaultMarketCoins(emptyDigital())});assert.equal(first.owner,catalog.owner);
 const ledger=structuredClone(initial);ledger.transactions.push({id:'local-first',date:'2026-10-21',type:'expense',amount:3200,account:'bank',to:'',category:'c0',merchant:'午餐',channel:'',note:'private fixture',status:'posted'});
 assert.equal((await request('/api/ledger','PUT',{ledger,revision:0,action:'新增本机流水'})).status,200);
 assert.equal((await request('/api/ledger')).data.ledger.transactions.length,1);
 const history=(await request('/api/history')).data.history;assert.equal(history.length,1);assert.equal((await request('/api/history?id='+history[0].id)).data.ledger.transactions[0].id,'local-first');
 const stale=await request('/api/ledger','PUT',{ledger,revision:0});assert.equal(stale.status,409);assert.equal(stale.data.conflict,true);assert.equal(stale.data.revision,1);
-const book=(await request('/api/books','POST',{name:'独立账本'})).data.book;assert.equal((await request('/api/ledger?book='+book.id)).data.ledger.transactions.length,0);
+const book=(await request('/api/books','POST',{name:'独立账本'})).data.book;const newBook=(await request('/api/ledger?book='+book.id)).data;assert.equal(newBook.ledger.transactions.length,0);assert.equal(newBook.revision,0);assert.deepEqual(marketWatchlist(newBook.ledger.digital),DEFAULT_MARKET_COINS);assert.equal(newBook.ledger.digital.marketDefaultsVersion,1);
 assert.equal((await request('/api/history?book='+book.id+'&id='+history[0].id)).status,404);
 assert.equal((await request('/api/books?book='+book.id,'PATCH',{name:'家庭账本'})).status,200);
 assert.equal((await request('/api/books','POST',{name:'家庭账本'})).status,409);assert.equal((await request('/api/books','POST',{name:'   '})).status,400);
@@ -26,7 +26,7 @@ const consent=structuredClone(ledger);consent.preferences={cloudAI:true};await r
 for(let revision=2;revision<25;revision++)assert.equal((await request('/api/ledger','PUT',{ledger,revision,action:'历史保留'})).status,200);
 assert.equal((await request('/api/history')).data.history.length,20);assert.equal((await request('/api/history?id='+history[0].id)).status,404);
 const sample=(await request('/api/books','POST',{name:'示例账本',example:true})).data.book;const sampleData=(await request('/api/ledger?book='+sample.id)).data.ledger;
-validate(sampleData);assert.equal(sampleData.transactions.length,6);assert.equal(sampleData.transactions.every(t=>t.note.includes('虚构')),true);assert.equal((await request('/api/ledger')).data.ledger.transactions[0].id,'local-first');
+validate(sampleData);assert.deepEqual(marketWatchlist(sampleData.digital),DEFAULT_MARKET_COINS);assert.equal(sampleData.digital.marketDefaultsVersion,1);assert.equal(sampleData.transactions.length,6);assert.equal(sampleData.transactions.every(t=>t.note.includes('虚构')),true);assert.equal((await request('/api/ledger')).data.ledger.transactions[0].id,'local-first');
 assert.equal(nativeBalances(sampleData).HKD['example-bank'],30000);
 // Watchlists are financial-book preferences: persist, restore and isolate them with the ledger.
 const marketBook=structuredClone(initial);marketBook.digital={...emptyDigital(),marketWatchlist:[MARKET_PRESETS.find(c=>c.symbol==='BTC')]};
@@ -49,7 +49,7 @@ assert.equal((await request('/api/ledger?book='+marketBookB.id,'PUT',{ledger:mar
 assert.deepEqual((await request('/api/ledger?book='+marketBookB.id)).data.ledger.digital.marketWatchlist,marketBook.digital.marketWatchlist);
 marketBackup.ledger.digital.marketWatchlist=[];
 assert.equal((await request('/api/ledger?book='+marketBookB.id,'PUT',{ledger:marketBackup.ledger,revision:2,action:'移除全部行情'})).status,200);
-assert.deepEqual((await request('/api/ledger?book='+marketBookB.id)).data.ledger.digital.marketWatchlist,[]);
+assert.deepEqual((await request('/api/ledger?book='+marketBookB.id)).data.ledger.digital.marketWatchlist,[]);assert.equal((await request('/api/ledger?book='+marketBookB.id)).data.ledger.digital.marketDefaultsVersion,1);
 assert.equal((await request('/api/ledger?book='+book.id)).data.ledger.digital.marketWatchlist[0].symbol,'BTC');
 // A pre-removal backup can still be restored; the hidden market does not delete saved assets.
 const legacyBoxBook=(await request('/api/books','POST',{name:'旧版资产备份'})).data.book;
