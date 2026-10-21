@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { Coins, Download, Pencil, Plus, RefreshCw, X } from 'lucide-react';
+import { Coins, Download, Pencil, Plus, X } from 'lucide-react';
 import { newId } from '../../lib/ids';
 import { money, validate } from '../../lib/ledger';
 import { decimal, digitalPositions, emptyDigital, setDigitalBalance, units, type Position } from '../../lib/digital';
@@ -10,6 +10,8 @@ import type { DigitalAsset, DigitalBook, DigitalEvent, DigitalWallet } from '../
 import { fileDownload, type PanelProps } from './FinancePanels';
 import { useMarketPrices } from '../../hooks/use-market-prices';
 import { SUPPORTED_COINS, usableQuote, withMarketPrices } from '../../lib/market-prices';
+import { marketWatchlist } from '../../lib/market-watchlist';
+import { MarketWatchlistPanel } from './MarketWatchlistPanel';
 
 type BalanceDraft = {
     asset: string;
@@ -29,7 +31,7 @@ export function DigitalPanel({ ledger: l, save, busy }: PanelProps) {
     const [draft, setDraft] = useState<BalanceDraft | null>(null);
     const [wallet, setWallet] = useState<DigitalWallet | null>(null);
     const [error, setError] = useState('');
-    const { market, priceError, priceLoading, priceNow, refreshPrices } = useMarketPrices();
+    const { market, priceError, priceLoading, priceNow, refreshPrices } = useMarketPrices(marketWatchlist(d));
     const pricedBook = withMarketPrices(d, market, priceNow);
     let summary;
     try {
@@ -124,20 +126,11 @@ export function DigitalPanel({ ledger: l, save, busy }: PanelProps) {
         fileDownload('轻记_数字资产历史.csv', toCSV(rows), 'text/csv;charset=utf-8');
     }
     return <div className="digital-layout manual-digital">
-        <section className="panel full-span digital-market" aria-label="主流币美元及人民币行情">
-            <div className="section-heading"><div><h2>主流币行情</h2><p className="muted">美元 USD · 人民币 CNY · 每 60 秒自动刷新</p></div><button className="secondary" disabled={priceLoading} onClick={() => void refreshPrices()}><RefreshCw size={15}/>{priceLoading ? '刷新中…' : '刷新行情'}</button></div>
-            <div className="digital-market-grid">{SUPPORTED_COINS.map(coin => {
-                const quote = market?.quotes[coin.symbol];
-                const available = usableQuote(quote, priceNow);
-                return <article className="digital-market-card" key={coin.symbol}><div><b>{coin.symbol}</b><span>{coin.name}</span></div><div className="digital-market-prices">{(['USD', 'CNY'] as const).map(currency => <div key={currency}><span>{currency === 'USD' ? '美元 USD' : '人民币 CNY'}</span><strong>{available ? (currency === 'USD' ? '$' : '¥') + Number(currency === 'USD' ? quote!.priceUSD : quote!.priceCNY).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: coin.symbol === 'USDT' ? 4 : 2 }) : priceLoading ? '加载中…' : '暂不可用'}</strong></div>)}</div><small>{available && quote!.change24h !== null ? `24h (CNY) ${quote!.change24h >= 0 ? '+' : ''}${quote!.change24h.toFixed(2)}%` : available && quote!.source === 'Coinbase' ? '人民币按美元交叉汇率换算' : '24h 涨跌暂无数据'}</small><small>{available ? (['Coinbase', 'BigONE BOX/USDT'].includes(quote!.source) ? '获取时间 ' : '报价时间 ') + timestamp(quote!.at) : '等待有效报价'}</small>{coin.symbol === 'BOX' && <small>{available ? `BigONE · 最近成交 ${quote!.priceUSDT} USDT · ${timestamp(quote!.tradeAt || '')} · 美元/人民币按 USDT 折算` : market?.boxError || '等待 BOX/USDT 行情'}<br/>李笑来 BOX · 二级市场成交参考价，非基金净值；不适用于 BOX4。</small>}</article>;
-            })}</div>
-            {priceError && <p className="muted" role="status">{priceError}</p>}
-            <p className="digital-market-attribution">Data provided by <a href="https://www.coingecko.com/en/api" target="_blank" rel="noreferrer">CoinGecko</a> / <a href="https://www.coinbase.com/" target="_blank" rel="noreferrer">Coinbase</a> / <a href="https://coinpaprika.com/" target="_blank" rel="noreferrer">CoinPaprika</a> / <a href="https://open.bigone.com/docs/spot/rest/get-ticker/" target="_blank" rel="noreferrer">BigONE</a> · 市场参考价，非场外买卖报价。当前来源：{market ? [...new Set(Object.values(market.quotes).map(q => q.source))].join('、') : '等待行情'}。</p>
-        </section>
+        <MarketWatchlistPanel book={d} update={update} busy={busy} market={market} priceError={priceError} priceLoading={priceLoading} priceNow={priceNow} refreshPrices={refreshPrices}/>
         <section className="panel full-span digital-overview">
             <div className="section-heading"><div><h2>我的资产余额</h2><p className="muted">自己定义币种，自己掌握余额。</p></div><span className="badge">手动余额 · 行情估值</span></div>
             <div className="asset-summary"><div>已估值资产合计<b>{noPrices ? '待填写单价' : '¥' + money(summary.value)}</b></div><div>有余额的币种<b>{currencies}<small>种</small></b></div><div>资产账户<b>{d.wallets.length}<small>个</small></b></div></div>
-            <p className="muted">余额按你填写的数量保存。BTC、ETH、USDT、BOX 优先按行情估值；行情不可用时使用手动参考单价，自定义币种可自行填写。{summary.missing > 0 && ` ${summary.missing} 项资产缺少有效单价，未计入估值合计。`}</p>
+            <p className="muted">余额按你填写的数量保存。添加到“我的行情”的币种优先使用行情估值；未关注或行情不可用时使用手动参考单价。{summary.missing > 0 && ` ${summary.missing} 项资产缺少有效单价，未计入估值合计。`}</p>
             <div className="button-row import-actions"><button className="primary" disabled={busy} onClick={() => editBalance()}><Plus size={16}/>添加资产</button><button className="secondary" disabled={!positions.length} onClick={exportBalances}><Download size={15}/>导出余额</button></div>
             {!draft && !wallet && error && <p className="error" role="alert">{error}</p>}
         </section>
@@ -147,7 +140,8 @@ export function DigitalPanel({ ledger: l, save, busy }: PanelProps) {
                 const a = d.assets.find(a => a.id === pos.asset)!;
                 const b = d.manualBalances?.find(b => b.asset === pos.asset && b.wallet === pos.wallet);
                 const q = pricedBook.quotes[pos.asset];
-                const live = market?.quotes[a.symbol.trim().toUpperCase()];
+                const candidate = market?.quotes[a.symbol.trim().toUpperCase()];
+                const live = q === candidate ? candidate : undefined;
                 return <article className="digital-balance-card" key={pos.wallet + '|' + pos.asset}>
                     <div className="digital-balance-heading"><div className="digital-coin-icon" aria-hidden="true">{a.symbol.slice(0, 3)}</div><div><h3>{a.symbol}</h3><p>{a.name || '自定义币种'} · {d.wallets.find(w => w.id === pos.wallet)?.name}</p></div><button className="icon-button" aria-label={`修改 ${a.symbol} 在${d.wallets.find(w => w.id === pos.wallet)?.name}的余额`} disabled={busy} onClick={() => editBalance(pos)}><Pencil size={16}/></button></div>
                     <div className="digital-balance-amount"><span>当前余额</span><strong>{pos.quantity}</strong><small>{a.symbol}</small></div>
@@ -172,7 +166,7 @@ export function DigitalPanel({ ledger: l, save, busy }: PanelProps) {
                 <label>币种名称（可选）<input maxLength={200} placeholder="如 比特币、以太坊" value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })}/></label>
                 <label>当前余额<input required maxLength={64} inputMode="decimal" placeholder="支持 0，最多 18 位小数" value={draft.quantity} onChange={e => setDraft({ ...draft, quantity: e.target.value })}/></label>
                 <label>人民币参考单价（可选）<input maxLength={64} inputMode="decimal" placeholder="每 1 单位资产的人民币价格" value={draft.price} onChange={e => setDraft({ ...draft, price: e.target.value })}/></label>
-            </div>{draft.editing && <p className="muted">切换币种或账户会加载对应余额；保存仅更新当前选择的组合。</p>}<p className="muted">BTC、ETH、USDT、BOX 自动使用人民币行情；手动单价作为备用。其他币种单价留空时只记录数量。同一币种共用单价，余额可填 0。</p><label>备注（可选）<textarea maxLength={2000} placeholder="记录这项资产的说明" value={draft.note} onChange={e => setDraft({ ...draft, note: e.target.value })}/></label>{error && <p className="error" role="alert">{error}</p>}<div className="dialog-bottom"><button type="button" className="secondary" disabled={busy} onClick={() => setDraft(null)}>取消</button><button className="primary" disabled={busy}>保存余额</button></div></form>
+            </div>{draft.editing && <p className="muted">切换币种或账户会加载对应余额；保存仅更新当前选择的组合。</p>}<p className="muted">关注列表中同符号币种自动使用人民币行情；手动单价作为备用。未关注且单价留空时只记录数量。同一币种共用单价，余额可填 0。</p><label>备注（可选）<textarea maxLength={2000} placeholder="记录这项资产的说明" value={draft.note} onChange={e => setDraft({ ...draft, note: e.target.value })}/></label>{error && <p className="error" role="alert">{error}</p>}<div className="dialog-bottom"><button type="button" className="secondary" disabled={busy} onClick={() => setDraft(null)}>取消</button><button className="primary" disabled={busy}>保存余额</button></div></form>
         </section></div>}
         {wallet && <div className="overlay"><section className="dialog" role="dialog" aria-modal="true" aria-label="资产账户" onKeyDown={e => { if (e.key === 'Escape' && !busy) setWallet(null); }}><div className="section-heading"><h2>资产账户</h2><button className="icon-button" aria-label="关闭" disabled={busy} onClick={() => setWallet(null)}><X size={20}/></button></div><form onSubmit={submitWallet}><label>账户名称<input autoFocus required maxLength={200} placeholder="如 我的资产、长期持有" value={wallet.name} onChange={e => setWallet({ ...wallet, name: e.target.value })}/></label>{error && <p className="error" role="alert">{error}</p>}<div className="dialog-bottom"><button type="button" className="secondary" disabled={busy} onClick={() => setWallet(null)}>取消</button><button className="primary" disabled={busy}>保存账户</button></div></form></section></div>}
     </div>;

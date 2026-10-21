@@ -3,6 +3,7 @@ import type { Ledger } from './ledger.ts';
 import { digitalPositions, units } from './digital.ts';
 import { cardNames } from './extensions.ts';
 import { validateHK } from './hk-securities.ts';
+import { validateMarketWatchlist } from './market-watchlist.ts';
 export function validateExtensions(l: Ledger) {
     validateHK(l);
     const text = (s: unknown, n = 200) => typeof s === 'string' && s.length <= n;
@@ -75,6 +76,7 @@ export function validateExtensions(l: Ledger) {
     }
     if (l.digital) {
         const d = l.digital;
+        if (d.marketWatchlist !== undefined) validateMarketWatchlist(d.marketWatchlist);
         if (!Array.isArray(d.wallets) || !Array.isArray(d.assets) || !Array.isArray(d.events) || typeof d.quotes !== 'object' || !d.quotes || d.wallets.length > 100 || d.assets.length > 200 || d.events.length > 10000)
             throw Error('数字资产账本无效');
         const wallets = new Set(d.wallets.map(w => w.id)), assets = new Set(d.assets.map(a => a.id));

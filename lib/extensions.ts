@@ -89,12 +89,14 @@ export type DigitalBook = {
     assets: DigitalAsset[];
     events: DigitalEvent[];
     manualBalances?: DigitalBalance[];
+    marketWatchlist?: MarketCoin[];
     quotes: Record<string, {
         priceCNY: string;
         source: string;
         at: string;
     }>;
 };
+export type MarketCoin = { symbol: string; name: string; priceId: string };
 export type LedgerExtensions = {
     hkSecurities?: HKBook;
     recurring?: RecurringRule[];

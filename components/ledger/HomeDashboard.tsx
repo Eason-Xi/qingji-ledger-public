@@ -5,7 +5,8 @@ import { money, balances, nativeBalances, totals, accountType, type Ledger } fro
 import { budgetFor, prefs, reportTransactions, creditStatement, dueOccurrences } from '../../lib/features';
 import { digitalPositions, emptyDigital } from '../../lib/digital';
 import { hasHKDSettings } from '../../lib/account-currency';
-import { MAIN_COINS, withMarketPrices } from '../../lib/market-prices';
+import { withMarketPrices } from '../../lib/market-prices';
+import { marketWatchlist } from '../../lib/market-watchlist';
 import { hkPortfolio, emptyHK } from '../../lib/hk-securities';
 import { useMarketPrices } from '../../hooks/use-market-prices';
 export function HomeDashboard({ ledger: l, month, summary, composer, recent, onNavigate }: {
@@ -21,7 +22,7 @@ export function HomeDashboard({ ledger: l, month, summary, composer, recent, onN
     const due = dueOccurrences(l);
     const cards = l.accounts.map(a => ({ a, s: creditStatement(l, a) })).filter(x => x.s && x.s.outstanding > 0);
     const book = l.digital || emptyDigital();
-    const { market, priceNow } = useMarketPrices(book.assets.some(a => MAIN_COINS.some(c => c.symbol === a.symbol.toUpperCase())));
+    const { market, priceNow } = useMarketPrices(marketWatchlist(book).filter(c => book.assets.some(a => a.symbol.trim().toUpperCase() === c.symbol)));
     const digital = digitalPositions(withMarketPrices(book, market, priceNow), p.costMethod);
     const hkMissing = hkPortfolio(l.hkSecurities || emptyHK(), l.transactions).accounts.reduce((sum, a) => sum + a.missing, 0);
     const securities = l.accounts.filter(a => accountType(a) === 'securities');

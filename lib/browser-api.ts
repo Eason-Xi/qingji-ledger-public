@@ -58,7 +58,7 @@ export function createBrowserAPI(factory: IDBFactory | undefined = globalThis.in
         const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'https://qingji.invalid');
         const method = (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
         try {
-            if (url.pathname === '/api/prices' && method === 'GET') return reply(await prices());
+            if (url.pathname === '/api/prices' && method === 'GET') return reply(await prices(JSON.parse(url.searchParams.get('coins') || '[]')));
             if (url.pathname === '/api/hk-rates' && method === 'GET') return reply(await rates());
             if (url.pathname.startsWith('/api/ai/')) return reply({ error: '公开版使用本地规则解析，不接收或保存服务商密钥', config: null, storageReady: false, localOnly: true }, method === 'GET' ? 200 : 405);
             if (!['/api/books', '/api/ledger', '/api/history'].includes(url.pathname)) return reply({ error: '此操作不属于本地账本' }, 404);
