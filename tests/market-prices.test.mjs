@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import { createMarketPriceService, parseMarketPrices, withMarketPrices, MAX_PRICE_AGE, PRICE_URL, COINBASE_URL, MAIN_COINS, SUPPORTED_COINS } from '../lib/market-prices.ts';
 import { digitalPositions } from '../lib/digital.ts';
+import { MARKET_PRESETS } from '../lib/market-watchlist.ts';
 const selection = [...MAIN_COINS];
 const legacyBox = { symbol: 'BOX', name: 'BOX（李笑来）', priceId: '' };
 const legacyBoxSource = 'BigONE BOX/USDT';
-assert.deepEqual(SUPPORTED_COINS.map(c => c.symbol), ['BTC', 'ETH', 'USDT']);
+assert.deepEqual(SUPPORTED_COINS.map(c => c.symbol), ['BTC', 'ETH', 'USDT', 'BNB']);
+assert.deepEqual(MAIN_COINS.map(c => c.symbol), ['BTC', 'ETH', 'USDT']);
+const bnb = MARKET_PRESETS.find(c => c.symbol === 'BNB');
+const legacyBNB = { symbol: 'BNB', name: 'BNB', priceId: 'bnb' };
 const sol = { symbol: 'SOL', name: 'Solana', priceId: 'solana' };
 const isPrimary = url => String(url).startsWith('https://api.coingecko.com/api/v3/simple/price?');
 const requestedIDs = url => new URL(String(url)).searchParams.get('ids').split(',').sort();
@@ -143,6 +147,69 @@ await customService([sol]); assert.equal(customCalls, 1);
 const parsedCustom = parseMarketPrices({ solana: { cny: 10.12345678, usd: 1.23456789, last_updated_at: now / 1000 } }, now, 'CoinGecko', [sol]);
 assert.equal(parsedCustom.quotes.SOL.priceUSD, '1.23456789');
 assert.equal(parsedCustom.quotes.BTC, undefined);
+
+// BNB's website slug is not its API ID. Old saved aliases query the canonical identity.
+let bnbPrimaryCalls = 0;
+const bnbPrimary = createMarketPriceService(async url => {
+    bnbPrimaryCalls++; assert.ok(isPrimary(url));
+    assert.deepEqual(requestedIDs(url), ['binancecoin']);
+    return Response.json({ binancecoin: { cny: 5000.12345678, usd: 750.87654321, cny_24h_change: 1.25, last_updated_at: now / 1000 } });
+}, () => now);
+const canonicalBNBPrices = await bnbPrimary([legacyBNB]);
+assert.equal(canonicalBNBPrices.quotes.BNB.priceId, 'binancecoin');
+assert.equal(canonicalBNBPrices.quotes.BNB.priceCNY, '5000.12345678');
+assert.equal(canonicalBNBPrices.quotes.BNB.priceUSD, '750.87654321');
+assert.equal(canonicalBNBPrices.quotes.BNB.change24h, 1.25);
+assert.equal((await bnbPrimary([bnb])).quotes.BNB.priceId, 'binancecoin');
+assert.equal(bnbPrimaryCalls, 1); // Canonical and legacy forms share a scoped cache entry.
+assert.equal(legacyBNB.priceId, 'bnb');
+
+// BNB has a verified independent dual-currency source when the primary source is unavailable.
+const bnbFallbackURLs = [];
+const bnbFallback = createMarketPriceService(async url => {
+    bnbFallbackURLs.push(String(url));
+    if (isPrimary(url) || url === COINBASE_URL) return new Response('unavailable', { status: 503 });
+    assert.equal(String(url), 'https://api.coinpaprika.com/v1/tickers/bnb-binance-coin?quotes=CNY,USD');
+    return Response.json({ id: 'bnb-binance-coin', symbol: 'BNB', last_updated: new Date(now).toISOString(), quotes: { CNY: { price: 4985.12345678, percent_change_24h: 2.5 }, USD: { price: 746.87654321 } } });
+}, () => now);
+const fallbackBNBPrices = await bnbFallback([legacyBNB]);
+assert.equal(fallbackBNBPrices.quotes.BNB.priceCNY, '4985.12345678');
+assert.equal(fallbackBNBPrices.quotes.BNB.priceUSD, '746.87654321');
+assert.equal(fallbackBNBPrices.quotes.BNB.source, 'CoinPaprika');
+assert.equal(fallbackBNBPrices.quotes.BNB.priceId, 'binancecoin');
+assert.equal(bnbFallbackURLs.filter(url => url.includes('/tickers/')).length, 1);
+
+// A historical custom BNB ID stays readable, but ticker alone never authorizes a fallback identity.
+const customBNB = { symbol: 'BNB', name: 'User selected custom identity', priceId: 'another-bnb-token' };
+const unrelatedBNB = { symbol: 'CUSTOM', name: 'User selected symbol', priceId: 'binancecoin' };
+for (const coin of [customBNB, unrelatedBNB]) {
+    const customBNBURLs = [];
+    const customBNBService = createMarketPriceService(async url => {
+        customBNBURLs.push(String(url)); assert.ok(isPrimary(url));
+        assert.deepEqual(requestedIDs(url), [coin.priceId]);
+        return Response.json({});
+    }, () => now);
+    await assert.rejects(customBNBService([coin]), /暂时不可用/);
+    assert.equal(customBNBURLs.length, 1);
+}
+
+// A malformed fallback symbol cannot become a BNB price even at a trusted endpoint.
+const wrongFallbackBNB = createMarketPriceService(async url => {
+    if (isPrimary(url) || url === COINBASE_URL) return new Response('unavailable', { status: 503 });
+    return Response.json({ symbol: 'OTHER', last_updated: new Date(now).toISOString(), quotes: { CNY: { price: 5000 }, USD: { price: 750 } } });
+}, () => now);
+await assert.rejects(wrongFallbackBNB([bnb]), /暂时不可用/);
+
+// Editing a market ID cannot reuse prices cached under the old ID.
+let changedBNBCalls = 0;
+const changedBNB = createMarketPriceService(async url => {
+    changedBNBCalls++; assert.ok(isPrimary(url));
+    const [id] = requestedIDs(url);
+    return Response.json({ [id]: { cny: id === 'binancecoin' ? 5000 : 10, usd: id === 'binancecoin' ? 750 : 1.5, last_updated_at: now / 1000 } });
+}, () => now);
+assert.equal((await changedBNB([customBNB])).quotes.BNB.priceCNY, '10');
+assert.equal((await changedBNB([bnb])).quotes.BNB.priceCNY, '5000');
+assert.equal(changedBNBCalls, 2);
 
 // Different list requests and pending promises cannot return another list's results.
 let scopedCalls = 0, releaseBTC;

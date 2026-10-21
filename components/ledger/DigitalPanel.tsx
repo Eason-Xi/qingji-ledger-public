@@ -150,7 +150,7 @@ export function DigitalPanel({ ledger: l, save, busy }: PanelProps) {
                     {b?.note && <p className="digital-balance-note">{b.note}</p>}
                     <div className="digital-balance-footer"><small>{b ? '更新于 ' + timestamp(b.updated) : '历史记录计算的余额'}</small><button className="text-button" disabled={busy} onClick={() => editBalance(pos)}>修改余额</button></div>
                 </article>;
-            })}</div> : <div className="digital-empty"><span><Coins size={29}/></span><h3>添加你的第一项资产</h3><p>BTC、ETH、USDT，或任意自定义币种。<br/>填写当前余额，即可开始管理。</p><button className="primary" disabled={busy} onClick={() => editBalance()}><Plus size={16}/>添加资产</button></div>}
+            })}</div> : <div className="digital-empty"><span><Coins size={29}/></span><h3>添加你的第一项资产</h3><p>BTC、ETH、USDT、BNB，或任意自定义币种。<br/>填写当前余额，即可开始管理。</p><button className="primary" disabled={busy} onClick={() => editBalance()}><Plus size={16}/>添加资产</button></div>}
         </section>
         <details className="panel full-span digital-management"><summary>资产账户管理</summary><p className="muted">默认保存在“我的资产”中。也可以创建多个账户，分别记录每个账户中的余额。</p>
             {d.wallets.map(w => <div className="manage-row" key={w.id}><div><b>{w.name}</b></div><button className="text-button" disabled={busy} onClick={() => { setError(''); setWallet(w); }}>编辑名称</button></div>)}
@@ -162,7 +162,7 @@ export function DigitalPanel({ ledger: l, save, busy }: PanelProps) {
             <form onSubmit={submitBalance}><div className="form-grid">
                 <label>选择币种<select value={draft.asset || (SUPPORTED_COINS.some(c => c.symbol === draft.symbol) ? 'preset:' + draft.symbol : '')} disabled={busy} onChange={e => chooseAsset(e.target.value)}><option value="">自定义新币种</option>{SUPPORTED_COINS.filter(c => !d.assets.some(a => a.symbol.toUpperCase() === c.symbol)).map(c => <option key={c.symbol} value={'preset:' + c.symbol}>{c.symbol} · {c.name}</option>)}{d.assets.map(a => <option key={a.id} value={a.id}>{a.symbol}{a.name ? ' · ' + a.name : ''}</option>)}</select></label>
                 <label>资产账户<select value={draft.wallet} disabled={busy} onChange={e => chooseWallet(e.target.value)}>{!d.wallets.length && <option value="">我的资产（默认）</option>}{d.wallets.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label>
-                <label>币种符号<input autoFocus required maxLength={30} placeholder="如 BTC、ETH、USDT" value={draft.symbol} onChange={e => setDraft({ ...draft, symbol: e.target.value.toUpperCase() })}/></label>
+                <label>币种符号<input autoFocus required maxLength={30} placeholder="如 BTC、ETH、USDT、BNB" value={draft.symbol} onChange={e => setDraft({ ...draft, symbol: e.target.value.toUpperCase() })}/></label>
                 <label>币种名称（可选）<input maxLength={200} placeholder="如 比特币、以太坊" value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })}/></label>
                 <label>当前余额<input required maxLength={64} inputMode="decimal" placeholder="支持 0，最多 18 位小数" value={draft.quantity} onChange={e => setDraft({ ...draft, quantity: e.target.value })}/></label>
                 <label>人民币参考单价（可选）<input maxLength={64} inputMode="decimal" placeholder="每 1 单位资产的人民币价格" value={draft.price} onChange={e => setDraft({ ...draft, price: e.target.value })}/></label>

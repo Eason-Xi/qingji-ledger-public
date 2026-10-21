@@ -1,8 +1,8 @@
 import type { DigitalBook, MarketCoin } from './extensions.ts';
-import { MARKET_PRESETS, isRetiredMarketCoin, marketWatchlist, validateMarketWatchlist } from './market-watchlist.ts';
+import { MARKET_PRESETS, isRetiredMarketCoin, marketWatchlist, normalizeMarketCoin, validateMarketWatchlist } from './market-watchlist.ts';
 import { digitalPositions, units, valuation } from './digital.ts';
 
-export const MAIN_COINS = MARKET_PRESETS;
+export const MAIN_COINS = MARKET_PRESETS.slice(0, 3);
 export const SUPPORTED_COINS = MARKET_PRESETS;
 export type MarketQuote = { priceCNY: string; priceUSD: string; source: string; at: string; change24h: number | null; priceId?: string; tradeAt?: string; priceUSDT?: string };
 export type MarketPrices = { quotes: Record<string, MarketQuote>; stale: boolean; fetchedAt: string; errors?: Record<string, string> };
@@ -53,7 +53,7 @@ export function createMarketPriceService(fetcher: typeof fetch = (input, init) =
             if (response.ok) collect(await response.json(), 'CoinGecko', coins);
         } catch { /* Public endpoints may be blocked or rate-limited. */ }
         // Ticker fallbacks are used only for verified presets, never for a custom coin with a similar name.
-        let missing = coins.filter(c => !quotes[c.symbol] && MAIN_COINS.some(p => p.symbol === c.symbol && p.priceId === c.priceId));
+        let missing = coins.filter(c => !quotes[c.symbol] && MARKET_PRESETS.some(p => p.symbol === c.symbol && p.priceId === c.priceId));
         if (missing.length) {
             try {
                 const response = await fetcher(COINBASE_URL, fetchOptions());
@@ -70,7 +70,7 @@ export function createMarketPriceService(fetcher: typeof fetch = (input, init) =
         }
         missing = missing.filter(c => !quotes[c.symbol]);
         await Promise.allSettled(missing.map(async coin => {
-            const preset = MAIN_COINS.find(p => p.symbol === coin.symbol)!;
+            const preset = MARKET_PRESETS.find(p => p.symbol === coin.symbol)!;
             const response = await fetcher(`https://api.coinpaprika.com/v1/tickers/${preset.fallbackId}?quotes=CNY,USD`, fetchOptions());
             if (!response.ok) return;
             const body = await response.json() as { symbol?: string; last_updated?: string; quotes?: { CNY?: { price?: number; percent_change_24h?: number }; USD?: { price?: number } } };
@@ -84,7 +84,7 @@ export function createMarketPriceService(fetcher: typeof fetch = (input, init) =
     }
     return async function getPrices(selection: readonly MarketCoin[] = []): Promise<MarketPrices> {
         validateMarketWatchlist(selection);
-        const selected = selection.filter(coin => !isRetiredMarketCoin(coin));
+        const selected = selection.filter(coin => !isRetiredMarketCoin(coin)).map(normalizeMarketCoin);
         if (!selected.length) return { quotes: {}, stale: false, fetchedAt: new Date(now()).toISOString() };
         const key = JSON.stringify(selected.map(c => [c.symbol, c.priceId]).sort((a, b) => a[0].localeCompare(b[0])));
         let entry = selections.get(key);
@@ -95,7 +95,7 @@ export function createMarketPriceService(fetcher: typeof fetch = (input, init) =
         const cache = entry;
         const fallback = () => {
             const quotes = Object.fromEntries(Object.entries(cache.cached?.quotes || {}).filter(([, q]) => usableQuote(q, now())));
-            if (!Object.keys(quotes).length) throw Error('行情暂时不可用，请稍后刷新或填写手动参考单价');
+            if (!Object.keys(quotes).length) throw Error('行情暂时不可用，请检查币种 API ID、稍后刷新或填写手动参考单价');
             return { ...cache.cached!, quotes, stale: true };
         };
         if (cache.cached && now() - Date.parse(cache.cached.fetchedAt) < TTL) return cache.cached;

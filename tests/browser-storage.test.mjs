@@ -4,7 +4,7 @@ import { createBrowserAPI } from '../lib/browser-api.ts';
 import { initial, validate, nativeBalances } from '../lib/ledger.ts';
 import { sampleLedger } from '../lib/sample-ledger.ts';
 import { emptyDigital } from '../lib/digital.ts';
-import { MARKET_PRESETS, marketWatchlist } from '../lib/market-watchlist.ts';
+import { MARKET_PRESETS, marketWatchlist, updateMarketCoin } from '../lib/market-watchlist.ts';
 const factory=new IDBFactory();let calls=0;
 const api=createBrowserAPI(factory,'test-ledger',async()=>{calls++;throw Error('No network permitted in financial storage tests');});
 const request=async(path,method='GET',body)=>{const r=await api.request(path,{method,...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,data:await r.json()};};
@@ -66,6 +66,32 @@ assert.equal((await request('/api/ledger?book='+legacyBoxBook.id,'PUT',{ledger:o
 const restoredOldBox=(await request('/api/ledger?book='+legacyBoxBook.id)).data.ledger.digital;
 assert.deepEqual(marketWatchlist(restoredOldBox),[]);
 for(const field of ['assets','events','manualBalances','quotes'])assert.deepEqual(restoredOldBox[field],oldBoxBackup.digital[field]);
+// Old BNB website-slug IDs persist and restore without blocking access to the rest of the book.
+const bnbBook=(await request('/api/books','POST',{name:'BNB兼容备份'})).data.book;
+const oldBNBBackup=structuredClone(initial);oldBNBBackup.digital={
+ ...emptyDigital(),marketWatchlist:[{symbol:'BNB',name:'Saved BNB',priceId:'bnb'}],
+ wallets:[{id:'bnb-wallet',name:'Synthetic wallet',kind:'wallet',network:''}],
+ assets:[{id:'saved-bnb',symbol:'BNB',name:'Saved BNB',priceId:'',network:''}],
+ manualBalances:[{id:'bnb-wallet|saved-bnb',wallet:'bnb-wallet',asset:'saved-bnb',quantity:'2.123456789012345678',updated:'2026-10-21T00:00:00Z',note:'Saved synthetic balance'}],
+ quotes:{'saved-bnb':{priceCNY:'42',source:'手动录入',at:'2026-10-21T00:00:00Z'}},
+};
+const bnbBackupSnapshot=structuredClone(oldBNBBackup);
+validate(oldBNBBackup);
+assert.equal((await request('/api/ledger?book='+bnbBook.id,'PUT',{ledger:oldBNBBackup,revision:0,action:'恢复旧BNB备份'})).status,200);
+const storedOldBNB=(await request('/api/ledger?book='+bnbBook.id)).data.ledger.digital;
+assert.equal(marketWatchlist(storedOldBNB)[0].priceId,'binancecoin');
+for(const field of ['assets','events','manualBalances','quotes'])assert.deepEqual(storedOldBNB[field],oldBNBBackup.digital[field]);
+assert.deepEqual(oldBNBBackup,bnbBackupSnapshot);
+// Other historical IDs stay accessible and can be corrected without replacing asset balances.
+const wrongBNBBackup=JSON.parse(JSON.stringify(oldBNBBackup));wrongBNBBackup.digital.marketWatchlist[0].priceId='another-bnb-token';
+assert.equal((await request('/api/ledger?book='+bnbBook.id,'PUT',{ledger:wrongBNBBackup,revision:1,action:'恢复自定义BNB备份'})).status,200);
+const storedWrongBNB=(await request('/api/ledger?book='+bnbBook.id)).data.ledger;
+assert.equal(marketWatchlist(storedWrongBNB.digital)[0].priceId,'another-bnb-token');
+const correctedBNB={...storedWrongBNB,digital:updateMarketCoin(storedWrongBNB.digital,'BNB',{symbol:'BNB',name:'BNB',priceId:'binancecoin'})};
+assert.equal((await request('/api/ledger?book='+bnbBook.id,'PUT',{ledger:correctedBNB,revision:2,action:'修正BNB行情ID'})).status,200);
+const storedCorrectedBNB=(await request('/api/ledger?book='+bnbBook.id)).data.ledger.digital;
+assert.equal(marketWatchlist(storedCorrectedBNB)[0].priceId,'binancecoin');
+for(const field of ['assets','events','manualBalances','quotes'])assert.deepEqual(storedCorrectedBNB[field],oldBNBBackup.digital[field]);
 const api2=createBrowserAPI(factory,'test-ledger');const base=(await request('/api/ledger')).data;
 const concurrent=await Promise.all([api.request('/api/ledger',{method:'PUT',body:JSON.stringify({ledger,revision:base.revision})}),api2.request('/api/ledger',{method:'PUT',body:JSON.stringify({ledger,revision:base.revision})})]);assert.deepEqual(concurrent.map(r=>r.status).sort(),[200,409]);
 await api2.close();await api.close();
@@ -75,6 +101,13 @@ assert.deepEqual((await(await reopened.request('/api/ledger?book='+marketBookB.i
 const reopenedOldBox=(await(await reopened.request('/api/ledger?book='+legacyBoxBook.id)).json()).ledger.digital;
 assert.deepEqual(marketWatchlist(reopenedOldBox),[]);
 for(const field of ['assets','events','manualBalances','quotes'])assert.deepEqual(reopenedOldBox[field],oldBoxBackup.digital[field]);
+const reopenedBNB=(await(await reopened.request('/api/ledger?book='+bnbBook.id)).json()).ledger.digital;
+assert.equal(marketWatchlist(reopenedBNB)[0].priceId,'binancecoin');
+for(const field of ['assets','events','manualBalances','quotes'])assert.deepEqual(reopenedBNB[field],oldBNBBackup.digital[field]);
+const bnbHistory=(await(await reopened.request('/api/history?book='+bnbBook.id)).json()).history;
+assert.equal(bnbHistory.length,3);
+const aliasHistory=await(await reopened.request('/api/history?book='+bnbBook.id+'&id='+bnbHistory[2].id)).json();
+assert.equal(marketWatchlist(aliasHistory.ledger.digital)[0].priceId,'binancecoin');
 const separate=createBrowserAPI(new IDBFactory(),'test-ledger');const separateData=await(await separate.request('/api/ledger')).json();assert.equal(separateData.ledger.transactions.length,0);assert.notEqual(separateData.owner,catalog.owner);
 assert.equal(calls,0);assert.equal((await request('/api/ai/config','PUT',{apiKey:'synthetic-test-not-a-secret'})).status,405);assert.equal(calls,0);
 const unavailable=createBrowserAPI(undefined,'disabled');assert.equal((await unavailable.request('/api/books')).status,503);

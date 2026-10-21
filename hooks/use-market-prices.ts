@@ -23,7 +23,8 @@ export function useMarketPrices(selection: readonly MarketCoin[]) {
             setState({ key, market: data, error: data.stale ? '部分行情暂未更新，当前显示最近一次参考价。' : '', loading: false, now: Date.now() });
         } catch (e) {
             if (controller.signal.aborted) return;
-            setState({ key, market: null, error: e instanceof Error ? e.message : '行情暂时不可用', loading: false, now: Date.now() });
+            const error = e instanceof Error ? e.message : '行情暂时不可用';
+            setState({ key, market: { quotes: {}, stale: false, fetchedAt: new Date().toISOString(), errors: Object.fromEntries((JSON.parse(key) as MarketCoin[]).map(coin => [coin.symbol, error])) }, error, loading: false, now: Date.now() });
         } finally { if (priceRequest.current === controller) priceRequest.current = null; }
     }, [enabled, key]);
     useEffect(() => {
